@@ -1,7 +1,6 @@
 import json
 
 import numpy as np
-from datasets import load_dataset
 from sklearn.metrics import f1_score
 from transformers import (
     AutoModelForSequenceClassification,
@@ -9,6 +8,8 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+
+from datasets import load_dataset
 
 
 def compute_metrics(eval_pred):
@@ -45,7 +46,7 @@ class ModernFinTwitBERT:
 
     def encode(self, batch):
         return self.tokenizer(
-            batch["tweet"], truncation=True, padding="max_length", max_length=512
+            batch["text"], truncation=True, padding="max_length", max_length=512
         )
 
     def train(self):
@@ -56,20 +57,22 @@ class ModernFinTwitBERT:
             split="train",
         )
 
+        # Rename columns
+        dataset = dataset.rename_column("tweet", "text")
+        dataset = dataset.rename_column("sentiment", "label")
+
         split_dataset = dataset.train_test_split(test_size=0.1)
         tokenized_dataset = split_dataset.map(
-            self.encode, batched=True, remove_columns=["tweet"]
+            self.encode, batched=True, remove_columns=["text"]
         )
 
-        # Tokenize dataset
-        if "sentiment" in split_dataset["train"].features.keys():
-            split_dataset = split_dataset.rename_column("sentiment", "labels")
-
         # Define training args
+        # bsz 4 = 50 min
+        # bsz 8 = 40 min
         training_args = TrainingArguments(
             output_dir="ModernFinTwitBERT",
-            per_device_train_batch_size=32,
-            per_device_eval_batch_size=16,
+            per_device_train_batch_size=8,
+            per_device_eval_batch_size=8,
             learning_rate=5e-5,
             num_train_epochs=5,
             bf16=True,  # bfloat16 training
@@ -98,7 +101,10 @@ class ModernFinTwitBERT:
             compute_metrics=compute_metrics,
         )
         trainer.train()
+
+        # Save the model
         trainer.save_model(self.output_dir)
+        self.tokenizer.save_pretrained(self.output_dir)
 
 
 if __name__ == "__main__":
