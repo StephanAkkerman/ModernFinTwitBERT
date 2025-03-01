@@ -5,6 +5,8 @@ __pycache__/
 
 datasets/
 models/
+output/
+checkpoint-*/
 
 # C extensions
 *.so

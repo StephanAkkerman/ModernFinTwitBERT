@@ -2,3 +2,4 @@ transformers
 datasets
 accelerate
 scikit-learn
+#flash-attn
