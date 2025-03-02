@@ -11,8 +11,6 @@ from transformers import (
 
 from datasets import load_dataset
 
-# https://github.com/Dao-AILab/flash-attention/issues/1469
-
 
 def compute_metrics(eval_pred):
     predictions, labels = eval_pred
@@ -43,9 +41,12 @@ class ModernFinTwitBERT:
             id2label={k: v for k, v in enumerate(labels)},
             label2id={v: k for k, v in enumerate(labels)},
             attn_implementation="flash_attention_2",
+            device_map="cuda",
+            torch_dtype="auto",
+            cache_dir="models",
         )
         self.model.config.problem_type = "single_label_classification"
-        self.output_dir = "output/ModernFinTwitBERT-sentiment-test"
+        self.output_dir = "output/ModernFinTwitBERT-sentiment"
 
     def encode(self, batch):
         return self.tokenizer(
@@ -70,12 +71,10 @@ class ModernFinTwitBERT:
         )
 
         # Define training args
-        # bsz 4 = 50 min
-        # bsz 8 = 40 min
         training_args = TrainingArguments(
             output_dir="ModernFinTwitBERT",
-            per_device_train_batch_size=8,
-            per_device_eval_batch_size=8,
+            per_device_train_batch_size=256,
+            per_device_eval_batch_size=256,
             learning_rate=5e-5,
             num_train_epochs=2,
             bf16=True,  # bfloat16 training
@@ -87,7 +86,6 @@ class ModernFinTwitBERT:
             save_strategy="epoch",
             save_total_limit=2,
             load_best_model_at_end=True,
-            # use_mps_device=True,
             metric_for_best_model="f1",
             # push to hub parameters
             # push_to_hub=True,
