@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+from data import load_finetuning_data
 from sklearn.metrics import f1_score
 from transformers import (
     AutoModelForSequenceClassification,
@@ -8,8 +9,6 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
-
-from datasets import load_dataset
 
 
 def compute_metrics(eval_pred):
@@ -55,20 +54,11 @@ class ModernFinTwitBERT:
 
     def train(self):
         # Load the dataset
-        dataset = load_dataset(
-            "TimKoornstra/financial-tweets-sentiment",
-            cache_dir="datasets",
-            split="train",
-        )
+        train, val, test = load_finetuning_data()
 
-        # Rename columns
-        dataset = dataset.rename_column("tweet", "text")
-        dataset = dataset.rename_column("sentiment", "label")
-
-        split_dataset = dataset.train_test_split(test_size=0.1)
-        tokenized_dataset = split_dataset.map(
-            self.encode, batched=True, remove_columns=["text"]
-        )
+        train = train.map(self.encode, batched=True, remove_columns=["text"])
+        val = val.map(self.encode, batched=True, remove_columns=["text"])
+        test = test.map(self.encode, batched=True, remove_columns=["text"])
 
         # Define training args
         training_args = TrainingArguments(
@@ -97,8 +87,8 @@ class ModernFinTwitBERT:
         trainer = Trainer(
             model=self.model,
             args=training_args,
-            train_dataset=tokenized_dataset["train"],
-            eval_dataset=tokenized_dataset["test"],
+            train_dataset=train,
+            eval_dataset=val,
             compute_metrics=compute_metrics,
         )
         trainer.train()
@@ -106,6 +96,8 @@ class ModernFinTwitBERT:
         # Save the model
         trainer.save_model(self.output_dir)
         self.tokenizer.save_pretrained(self.output_dir)
+
+        # Evaluate the model
 
 
 if __name__ == "__main__":

@@ -193,7 +193,7 @@ def synonym_oversample(dataset: Dataset) -> pd.DataFrame:
     return Dataset.from_pandas(dataframe)
 
 
-def preprocess_dataset(dataset: Dataset) -> pd.DataFrame:
+def preprocess_dataset(dataset: Dataset) -> Dataset:
     # Convert to pandas
     dataframe = dataset.to_pandas()
 
@@ -218,7 +218,8 @@ def preprocess_dataset(dataset: Dataset) -> pd.DataFrame:
     # Drop 1 word tweets
     dataframe = dataframe[dataframe["text"].apply(lambda x: len(x.split()) > 1)]
 
-    return dataframe
+    # Convert dataframe back to dataset
+    return Dataset.from_pandas(dataframe)
 
 
 def adjust_labels(dataset):
