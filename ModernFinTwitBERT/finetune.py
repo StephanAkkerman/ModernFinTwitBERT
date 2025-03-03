@@ -12,6 +12,8 @@ from transformers import (
     TrainingArguments,
 )
 
+import wandb
+
 
 def compute_metrics(eval_pred):
     predictions, labels = eval_pred
@@ -49,6 +51,8 @@ class ModernFinTwitBERT:
         self.model.config.problem_type = "single_label_classification"
         self.output_dir = "output/ModernFinTwitBERT"
 
+        self.init_wandb()
+
     def init_wandb(self):
         # Check if a .env file exists
         if not os.path.exists("wandb.env"):
@@ -84,7 +88,8 @@ class ModernFinTwitBERT:
 
         # Define training args
         training_args = TrainingArguments(
-            output_dir="ModernFinTwitBERT",
+            output_dir="checkpoints/",
+            overwrite_output_dir=True,
             per_device_train_batch_size=256,
             per_device_eval_batch_size=256,
             learning_rate=5e-5,
