@@ -1,3 +1,4 @@
 {
-    "base_model": "answerdotai/ModernBERT-base"
+    "base_model": "answerdotai/ModernBERT-base",
+    "model_name": "ModernFinTwitBERT-sentiment"
 }

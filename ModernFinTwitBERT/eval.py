@@ -1,6 +1,7 @@
+import json
+
 import matplotlib.pyplot as plt
 import seaborn as sns
-import wandb
 from data import load_finetuning_data
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
 from sklearn.preprocessing import LabelEncoder
@@ -12,15 +13,21 @@ from transformers import (
 )
 from transformers.pipelines.pt_utils import KeyDataset
 
+import wandb
 from datasets import load_dataset
 
 
 class Evaluate:
-    def __init__(self, use_baseline: bool = False, baseline_model: int = 1):
+    def __init__(self, use_baseline: bool = False, baseline_model: int = 0):
+        # Load config
+        with open("config.json", "r") as config_file:
+            self.config = json.load(config_file)
+        self.model_name = self.config["model_name"]
+
         if not use_baseline:
             labels = ["NEUTRAL", "BULLISH", "BEARISH"]
             self.model = AutoModelForSequenceClassification.from_pretrained(
-                "output/ModernFinTwitBERT-sentiment",
+                f"output/{self.model_name}",
                 num_labels=len(labels),
                 id2label={k: v for k, v in enumerate(labels)},
                 label2id={v: k for k, v in enumerate(labels)},
@@ -30,36 +37,37 @@ class Evaluate:
                 cache_dir="models",
             )
             self.model.config.problem_type = "single_label_classification"
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                "output/ModernFinTwitBERT-sentiment"
-            )
+            self.tokenizer = AutoTokenizer.from_pretrained(f"output/{self.model_name}")
         else:
             if baseline_model == 0:
-                model_name = "StephanAkkerman/FinTwitBERT-Sentiment"
+                model_name = "StephanAkkerman/FinTwitBERT-sentiment"
             elif baseline_model == 1:
                 model_name = "ProsusAI/finbert"
             elif baseline_model == 2:
                 model_name = "yiyanghkust/finbert-tone"
 
-                self.model = BertForSequenceClassification.from_pretrained(
-                    model_name,
-                    cache_dir="models",
-                    device_map="cuda",
-                )
-                self.tokenizer = AutoTokenizer.from_pretrained(
-                    model_name,
-                    cache_dir="models",
-                )
+            self.model = BertForSequenceClassification.from_pretrained(
+                model_name,
+                cache_dir="models",
+                device_map="cuda",
+            )
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                cache_dir="models",
+            )
 
         self.model.eval()
         # https://huggingface.co/docs/transformers/main_classes/pipelines#transformers.pipeline
         self.pipeline = pipeline(
-            "text-classification", model=self.model, tokenizer=self.tokenizer
+            "text-classification",
+            model=self.model,
+            tokenizer=self.tokenizer,
+            max_length=512,
         )
 
-    def encode(self, data):
+    def encode(self, batch):
         return self.tokenizer(
-            data["text"], truncation=True, padding="max_length", max_length=512
+            batch["text"], truncation=True, padding="max_length", max_length=512
         )
 
     def load_test_data(self, tokenize: bool = True):
@@ -178,5 +186,5 @@ class Evaluate:
 
 
 if __name__ == "__main__":
-    eval = Evaluate(use_baseline=False)
+    eval = Evaluate(use_baseline=True, baseline_model=2)
     eval.evaluate_model()

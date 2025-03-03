@@ -12,8 +12,6 @@ from transformers import (
     TrainingArguments,
 )
 
-import wandb
-
 
 def compute_metrics(eval_pred):
     predictions, labels = eval_pred
@@ -34,6 +32,7 @@ class ModernFinTwitBERT:
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.config["base_model"], cache_dir="models"
         )
+        self.model_name = self.config["model_name"]
 
         labels = ["NEUTRAL", "BULLISH", "BEARISH"]
 
@@ -49,7 +48,7 @@ class ModernFinTwitBERT:
             cache_dir="models",
         )
         self.model.config.problem_type = "single_label_classification"
-        self.output_dir = "output/ModernFinTwitBERT"
+        self.output_dir = f"output/{self.model_name}"
 
         self.init_wandb()
 
@@ -69,7 +68,7 @@ class ModernFinTwitBERT:
         os.environ["WANDB_PROJECT"] = self.output_dir.split("/")[-1]
 
         # save your trained model checkpoint to wandb
-        os.environ["WANDB_LOG_MODEL"] = "true"
+        os.environ["WANDB_LOG_MODEL"] = "checkpoint"  # log all model checkpoints
 
         # turn off watch to log faster
         os.environ["WANDB_WATCH"] = "false"
