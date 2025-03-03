@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+wandb.env
+/wandb
+
 datasets/
 models/
 output/
@@ -174,3 +177,4 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+wandb.env

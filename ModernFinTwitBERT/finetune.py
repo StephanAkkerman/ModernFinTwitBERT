@@ -1,7 +1,9 @@
 import json
+import os
 
 import numpy as np
 from data import load_finetuning_data
+from dotenv import load_dotenv
 from sklearn.metrics import f1_score
 from transformers import (
     AutoModelForSequenceClassification,
@@ -45,7 +47,28 @@ class ModernFinTwitBERT:
             cache_dir="models",
         )
         self.model.config.problem_type = "single_label_classification"
-        self.output_dir = "output/ModernFinTwitBERT-sentiment"
+        self.output_dir = "output/ModernFinTwitBERT"
+
+    def init_wandb(self):
+        # Check if a .env file exists
+        if not os.path.exists("wandb.env"):
+            print("No wandb.env file found")
+            return
+
+        # Load the .env file
+        load_dotenv(dotenv_path="wandb.env")
+
+        # Read the API key from the environment variable
+        os.environ["WANDB_API_KEY"] = os.getenv("WANDB_API_KEY")
+
+        # set the wandb project where this run will be logged
+        os.environ["WANDB_PROJECT"] = self.output_dir.split("/")[-1]
+
+        # save your trained model checkpoint to wandb
+        os.environ["WANDB_LOG_MODEL"] = "true"
+
+        # turn off watch to log faster
+        os.environ["WANDB_WATCH"] = "false"
 
     def encode(self, batch):
         return self.tokenizer(
@@ -73,9 +96,11 @@ class ModernFinTwitBERT:
             logging_steps=100,
             eval_strategy="epoch",
             save_strategy="epoch",
-            save_total_limit=2,
+            save_total_limit=3,
             load_best_model_at_end=True,
             metric_for_best_model="f1",
+            report_to="wandb",
+            save_safetensors=True,
             # push to hub parameters
             # push_to_hub=True,
             # hub_strategy="every_save",
@@ -95,8 +120,6 @@ class ModernFinTwitBERT:
         # Save the model
         trainer.save_model(self.output_dir)
         self.tokenizer.save_pretrained(self.output_dir)
-
-        # Evaluate the model
 
 
 if __name__ == "__main__":
