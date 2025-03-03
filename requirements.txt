@@ -2,4 +2,7 @@ transformers
 datasets
 accelerate
 scikit-learn
-#flash-attn
+flash-attn
+matplotlib
+seaborn
+wandb

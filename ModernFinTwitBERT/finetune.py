@@ -54,11 +54,10 @@ class ModernFinTwitBERT:
 
     def train(self):
         # Load the dataset
-        train, val, test = load_finetuning_data()
+        train, val, _ = load_finetuning_data()
 
         train = train.map(self.encode, batched=True, remove_columns=["text"])
         val = val.map(self.encode, batched=True, remove_columns=["text"])
-        test = test.map(self.encode, batched=True, remove_columns=["text"])
 
         # Define training args
         training_args = TrainingArguments(

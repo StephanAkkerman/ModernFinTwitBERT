@@ -1,9 +1,15 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
 import wandb
+from data import load_finetuning_data
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
 from sklearn.preprocessing import LabelEncoder
-from transformers import AutoTokenizer, BertForSequenceClassification, pipeline
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    BertForSequenceClassification,
+    pipeline,
+)
 from transformers.pipelines.pt_utils import KeyDataset
 
 from datasets import load_dataset
@@ -13,8 +19,8 @@ class Evaluate:
     def __init__(self, use_baseline: bool = False, baseline_model: int = 1):
         if not use_baseline:
             labels = ["NEUTRAL", "BULLISH", "BEARISH"]
-            self.model = BertForSequenceClassification.from_pretrained(
-                "output/ModernFinTwitBERT",
+            self.model = AutoModelForSequenceClassification.from_pretrained(
+                "output/ModernFinTwitBERT-sentiment",
                 num_labels=len(labels),
                 id2label={k: v for k, v in enumerate(labels)},
                 label2id={v: k for k, v in enumerate(labels)},
@@ -24,7 +30,9 @@ class Evaluate:
                 cache_dir="models",
             )
             self.model.config.problem_type = "single_label_classification"
-            self.tokenizer = AutoTokenizer.from_pretrained("output/ModernFinTwitBERT")
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                "output/ModernFinTwitBERT-sentiment"
+            )
         else:
             if baseline_model == 0:
                 model_name = "StephanAkkerman/FinTwitBERT-Sentiment"
@@ -46,7 +54,7 @@ class Evaluate:
         self.model.eval()
         # https://huggingface.co/docs/transformers/main_classes/pipelines#transformers.pipeline
         self.pipeline = pipeline(
-            "text-classification", model=self.model, tokenizer=self.tokenizer, device=0
+            "text-classification", model=self.model, tokenizer=self.tokenizer
         )
 
     def encode(self, data):
@@ -79,7 +87,8 @@ class Evaluate:
         return dataset
 
     def evaluate_model(self):
-        true_labels, pred_labels = self.get_labels(category="finetune")
+        # Create a confusion matrix for the finetuning dataset on the evaluation set
+        true_labels, pred_labels = self.get_labels(category="eval")
         self.plot_confusion_matrix("eval", true_labels, pred_labels)
 
         true_labels, pred_labels = self.get_labels(category="test")
@@ -87,15 +96,22 @@ class Evaluate:
         self.plot_confusion_matrix("test", true_labels, pred_labels)
 
     def get_labels(self, category: str, batch_size: int = 32):
-        if category == "test":
-            dataset = self.load_test_data(tokenize=False)
-            # Convert numerical labels to textual labels
-            true_labels = [
-                dataset.features["label"].int2str(label) for label in dataset["label"]
-            ]
 
-        elif category == "finetune":
-            _, dataset = load_finetuning_data()
+        if category == "test":
+            _, _, dataset = load_finetuning_data()
+            # 0: neutral, 1: bullish, 2: bearish
+            int2str = {0: "neutral", 1: "bullish", 2: "bearish"}
+            true_labels = [int2str[label] for label in dataset["label"]]
+
+            # Convert numerical labels to textual labels
+            # dataset = self.load_test_data()
+            # true_labels = [
+            #     dataset.features["label"].int2str(label) for label in dataset["label"]
+            # ]
+
+        elif category == "eval":
+            _, dataset, _ = load_finetuning_data()
+
             # 0: neutral, 1: bullish, 2: bearish
             int2str = {0: "neutral", 1: "bullish", 2: "bearish"}
             true_labels = [int2str[label] for label in dataset["label"]]
@@ -107,9 +123,9 @@ class Evaluate:
             pred_labels.append(out["label"].lower())
 
         # Convert bullish to positive and bearish to negative
-        if category == "test":
-            label_mapping = {"bullish": "positive", "bearish": "negative"}
-            pred_labels = [label_mapping.get(label, label) for label in pred_labels]
+        # if category == "test":
+        #     label_mapping = {"bullish": "positive", "bearish": "negative"}
+        #     pred_labels = [label_mapping.get(label, label) for label in pred_labels]
 
         return true_labels, pred_labels
 
@@ -154,7 +170,8 @@ class Evaluate:
         plt.title("Confusion Matrix")
 
         # Log confusion matrix to wandb
-        wandb.log({f"{category}/confusion_matrix": wandb.Image(fig)})
+        if wandb.run is not None:
+            wandb.log({f"{category}/confusion_matrix": wandb.Image(fig)})
 
         # Close the plot
         plt.close(fig)
