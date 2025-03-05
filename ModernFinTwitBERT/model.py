@@ -54,8 +54,13 @@ class ModernFinTwitBERT:
             )
             # Load the tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
-                self.config["base_model"], cache_dir="models"
+                self.config[self.mode]["base_model"], cache_dir="models"
             )
+
+            # Add special tokens
+            special_tokens = ["@USER", "[URL]"]
+            self.tokenizer.add_tokens(special_tokens)
+            self.model.resize_token_embeddings(len(self.tokenizer))
 
             # Load the data
             self.train, self.val, _ = load_pretraining_data()
@@ -76,7 +81,7 @@ class ModernFinTwitBERT:
 
             # Load the tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
-                self.config["base_model"], cache_dir="models"
+                self.config[self.mode]["base_model"], cache_dir="models"
             )
 
             # Load the data
@@ -115,8 +120,20 @@ class ModernFinTwitBERT:
     def trainer(self):
         data_collator = None
 
-        train = self.train.map(self.encode, batched=True, remove_columns=["text"])
-        val = self.val.map(self.encode, batched=True, remove_columns=["text"])
+        train = self.train.map(
+            self.encode,
+            batched=True,
+            remove_columns=["text"],
+            batch_size=5_000,
+            # num_proc=4,
+        )
+        val = self.val.map(
+            self.encode,
+            batched=True,
+            remove_columns=["text"],
+            batch_size=5_000,
+            # num_proc=4,
+        )
 
         # Use the MLM data collator when pretraining
         if self.mode == "pretrain":
