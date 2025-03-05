@@ -1,4 +1,49 @@
 {
-    "base_model": "answerdotai/ModernBERT-base",
-    "model_name": "ModernFinTwitBERT-sentiment"
+    "mode": "pretrain",
+    "base_args": {
+        "output_dir": "checkpoints/",
+        "overwrite_output_dir": true,
+        "bf16": true,
+        "load_best_model_at_end": true,
+        "save_safetensors": true,
+        "save_total_limit": 2,
+        "optim": "adamw_torch_fused",
+        "eval_strategy": "epoch",
+        "save_strategy": "epoch",
+        "report_to": "wandb"
+    },
+    "pretrain": {
+        "model_name": "ModernFinTwitBERT",
+        "base_model": "answerdotai/ModernBERT-base",
+        "pretrain_args": {
+            "num_train_epochs": 10,
+            "per_device_train_batch_size": 256,
+            "per_device_eval_batch_size": 256,
+            "evaluation_strategy": "steps",
+            "save_steps": 10000,
+            "eval_steps": 10000,
+            "learning_rate": 0.00002,
+            "metric_for_best_model": "eval_loss",
+            "greater_is_better": false,
+            "warmup_ratio": 0.2
+        }
+    },
+    "finetune": {
+        "model_name": "ModernFinTwitBERT-sentiment",
+        "base_model": "answerdotai/ModernBERT-base",
+        "finetune_args": {
+            "num_train_epochs": 5,
+            "per_device_train_batch_size": 256,
+            "per_device_eval_batch_size": 256,
+            "evaluation_strategy": "steps",
+            "save_steps": 500,
+            "eval_steps": 500,
+            "logging_steps": 500,
+            "learning_rate": 0.00005,
+            "metric_for_best_model": "f1",
+            "greater_is_better": true,
+            "warmup_ratio": 0.4,
+            "weight_decay": 0.01
+        }
+    }
 }
