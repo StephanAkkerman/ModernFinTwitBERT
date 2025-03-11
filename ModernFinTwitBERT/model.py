@@ -120,6 +120,8 @@ class ModernFinTwitBERT:
     def trainer(self):
         data_collator = None
 
+        # Encode the data
+        # changing batch_size does not seem to change the speed
         train = self.train.map(
             self.encode,
             batched=True,
