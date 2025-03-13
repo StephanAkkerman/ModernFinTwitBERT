@@ -1,12 +1,9 @@
 {
-    "mode": "pretrain",
+    "mode": "finetune",
     "base_args": {
-        "output_dir": "checkpoints/",
-        "overwrite_output_dir": true,
         "bf16": true,
         "load_best_model_at_end": true,
         "save_safetensors": true,
-        "save_total_limit": 2,
         "optim": "adamw_torch_fused",
         "eval_strategy": "epoch",
         "save_strategy": "epoch",
@@ -15,6 +12,7 @@
     "pretrain": {
         "model_name": "ModernFinTwitBERT",
         "base_model": "answerdotai/ModernBERT-base",
+        "do_hyperopt": false,
         "pretrain_args": {
             "num_train_epochs": 10,
             "per_device_train_batch_size": 32,
@@ -28,8 +26,9 @@
     "finetune": {
         "model_name": "ModernFinTwitBERT-sentiment",
         "base_model": "answerdotai/ModernBERT-base",
+        "do_hyperopt": true,
         "finetune_args": {
-            "num_train_epochs": 5,
+            "num_train_epochs": 1,
             "per_device_train_batch_size": 256,
             "per_device_eval_batch_size": 256,
             "logging_steps": 500,
