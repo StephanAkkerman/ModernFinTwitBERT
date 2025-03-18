@@ -173,7 +173,7 @@ class ModernFinTwitBERT:
             best_run = trainer.hyperparameter_search(
                 direction="maximize",
                 backend="optuna",
-                n_trials=10,
+                n_trials=50,
                 hp_space=optuna_hp_space,
             )
 
@@ -225,8 +225,17 @@ def optuna_hp_space(trial):
     return {
         "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),
         "per_device_train_batch_size": trial.suggest_categorical(
-            "per_device_train_batch_size", [16, 32, 64, 128]
+            "per_device_train_batch_size", [16, 32, 64, 128, 256]
         ),
+        "num_train_epochs": trial.suggest_int("num_train_epochs", 1, 5),
+        "lr_scheduler_type": trial.suggest_categorical(
+            "lr_scheduler_type", ["linear", "cosine", "cosine_with_restarts"]
+        ),
+        "optim": trial.suggest_categorical(
+            "optim", ["adamw_torch", "adamw_torch_fused"]
+        ),
+        "warmup_steps": trial.suggest_int("warmup_steps", 0, 500),
+        "weight_decay": trial.suggest_float("weight_decay", 0.0, 0.3),
     }
 
 
