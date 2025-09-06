@@ -22,7 +22,7 @@ class Evaluate:
         # Load config
         with open("config.json", "r") as config_file:
             self.config = json.load(config_file)
-        self.model_name = self.config["model_name"]
+        self.model_name = self.config["finetune"]["model_name"]
 
         if not use_baseline:
             labels = ["NEUTRAL", "BULLISH", "BEARISH"]
@@ -186,5 +186,5 @@ class Evaluate:
 
 
 if __name__ == "__main__":
-    eval = Evaluate(use_baseline=True, baseline_model=2)
+    eval = Evaluate(use_baseline=True, baseline_model=0)
     eval.evaluate_model()

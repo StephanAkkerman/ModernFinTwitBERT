@@ -173,13 +173,27 @@ class ModernFinTwitBERT:
             best_run = trainer.hyperparameter_search(
                 direction="maximize",
                 backend="optuna",
-                n_trials=50,
+                n_trials=100,
                 hp_space=optuna_hp_space,
             )
 
-            # Apply the best hyperparameters and train one final time
-            trainer.apply_hyperparameters(best_run.hyperparameters, final_model=True)
+            print(best_run)
+            print(best_run.hyperparameters)
 
+            merged_args = {
+                **self.mode_args,
+                **self.config["base_args"],
+                **best_run.hyperparameters,
+            }
+
+            trainer = Trainer(
+                model=self.model,
+                args=TrainingArguments(**merged_args),
+                train_dataset=train,
+                eval_dataset=val,
+                data_collator=data_collator,
+                compute_metrics=compute_metrics_fn,
+            )
         else:
             # Create a Trainer instance, without model_init
             trainer = Trainer(
