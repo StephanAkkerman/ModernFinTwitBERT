@@ -2,26 +2,40 @@ import json
 import os
 
 import numpy as np
+import torch
 from data import load_finetuning_data, load_pretraining_data
 from dotenv import load_dotenv
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, precision_score
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     DataCollatorForLanguageModeling,
+    DataCollatorWithPadding,
     ModernBertForMaskedLM,
     Trainer,
     TrainingArguments,
 )
 
+# flash-attn only works on GPU; fall back to PyTorch attention elsewhere
+DEVICE_ARGS = (
+    {"attn_implementation": "flash_attention_2", "device_map": "cuda"}
+    if torch.cuda.is_available()
+    else {"attn_implementation": "sdpa"}
+)
+
 
 def compute_metrics(eval_pred):
+    """Macro F1 as the headline (the data is bullish-heavy), plus bullish/bearish precision."""
     predictions, labels = eval_pred
     predictions = np.argmax(predictions, axis=1)
-    score = f1_score(
-        labels, predictions, labels=labels, pos_label=1, average="weighted"
+    precision = precision_score(
+        labels, predictions, labels=[0, 1, 2], average=None, zero_division=0
     )
-    return {"f1": float(score) if score == 1 else score}
+    return {
+        "f1": f1_score(labels, predictions, labels=[0, 1, 2], average="macro"),
+        "precision_bullish": precision[1],
+        "precision_bearish": precision[2],
+    }
 
 
 class ModernFinTwitBERT:
@@ -46,13 +60,9 @@ class ModernFinTwitBERT:
         if self.mode == "pretrain":
             self.model = ModernBertForMaskedLM.from_pretrained(
                 self.config[self.mode]["base_model"],
-                num_labels=len(self.labels),
-                id2label={k: v for k, v in enumerate(self.labels)},
-                label2id={v: k for k, v in enumerate(self.labels)},
-                attn_implementation="flash_attention_2",
-                device_map="cuda",
                 torch_dtype="auto",
                 cache_dir="models",
+                **DEVICE_ARGS,
             )
             # Load the tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
@@ -69,17 +79,7 @@ class ModernFinTwitBERT:
 
         elif self.mode == "finetune":
             # Need to update for our own pretrained model
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                self.config[self.mode]["base_model"],
-                num_labels=len(self.labels),
-                id2label={k: v for k, v in enumerate(self.labels)},
-                label2id={v: k for k, v in enumerate(self.labels)},
-                attn_implementation="flash_attention_2",
-                device_map="cuda",
-                torch_dtype="auto",
-                cache_dir="models",
-            )
-            self.model.config.problem_type = "single_label_classification"
+            self.model = self.model_init()
 
             # Load the tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
@@ -87,8 +87,11 @@ class ModernFinTwitBERT:
             )
 
             # Load the data
-            self.train, self.val, _ = load_finetuning_data()
+            self.train, self.val = load_finetuning_data(
+                drop_sources=self.config[self.mode].get("drop_sources")
+            )
 
+        self.max_length = self.config[self.mode].get("max_length", 128)
         self.output_dir = f"output/{self.model_name}"
 
         self.init_wandb()
@@ -115,12 +118,13 @@ class ModernFinTwitBERT:
         os.environ["WANDB_WATCH"] = "false"
 
     def encode(self, batch):
+        # Tweets are short: truncate at max_length and pad per batch in the collator
         return self.tokenizer(
-            batch["text"], truncation=True, padding="max_length", max_length=512
+            batch["text"], truncation=True, max_length=self.max_length
         )
 
     def trainer(self):
-        data_collator = None
+        data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
 
         # Encode the data
         # changing batch_size does not seem to change the speed
@@ -173,7 +177,7 @@ class ModernFinTwitBERT:
             best_run = trainer.hyperparameter_search(
                 direction="maximize",
                 backend="optuna",
-                n_trials=100,
+                n_trials=self.config[self.mode].get("hyperopt_trials", 20),
                 hp_space=optuna_hp_space,
             )
 
@@ -218,17 +222,15 @@ class ModernFinTwitBERT:
         print("Saved model and tokenizer")
         return
 
-    def model_init(self, trial):
-
+    def model_init(self, trial=None):
         model = AutoModelForSequenceClassification.from_pretrained(
             self.config[self.mode]["base_model"],
             num_labels=len(self.labels),
             id2label={k: v for k, v in enumerate(self.labels)},
             label2id={v: k for k, v in enumerate(self.labels)},
-            attn_implementation="flash_attention_2",
-            device_map="cuda",
             torch_dtype="auto",
             cache_dir="models",
+            **DEVICE_ARGS,
         )
         model.config.problem_type = "single_label_classification"
         return model

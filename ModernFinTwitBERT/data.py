@@ -4,12 +4,31 @@ import html
 import random
 import re
 from collections import Counter
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 # Third party
-from datasets import Dataset, concatenate_datasets, load_dataset
+from datasets import ClassLabel, Dataset, concatenate_datasets, load_dataset
+
+# Frozen test set: 1,237 tweets from the financial-tweets export, first seen on or
+# after 2023-08-01, labeled with one guideline. Never train or tune on it.
+TEST_SET_PATH = Path(__file__).parent.parent / "data" / "test" / "test_v0.csv"
+LABELS = ["neutral", "bullish", "bearish"]
+
+# Short names for the sources in TimKoornstra/financial-tweets-sentiment (url column)
+SOURCES = {
+    "moritzwilksch": "moritz",
+    "poojathakoor": "pooja",
+    "crypto-sentiment": "surge_crypto",
+    "stock-sentiment": "surge_stock",
+    "fiqa": "fiqa",
+    "zeroshot": "zeroshot",
+    "ieee": "ieee",
+    "mattgilgo": "mattgilgo",
+    "yash612": "yash",
+}
 
 
 def preprocess_tweet(tweet: str) -> str:
@@ -39,6 +58,18 @@ def preprocess_tweet(tweet: str) -> str:
     # tweet = re.sub(r"\$[A-Z]{1,5}\b", "[TICKER]", tweet)
 
     return tweet
+
+
+def dedup_key(text: str) -> str:
+    """Normalized text used to find near-duplicates (same tweet, different link or mention)."""
+    text = re.sub(r"https?://\S+|\[URL\]", " ", html.unescape(text).lower())
+    text = re.sub(r"@\w+", " ", text)
+    return re.sub(r"\W+", " ", text).strip()
+
+
+def test_set_keys() -> set:
+    """Dedup keys of the frozen test set, to remove its tweets from any training data."""
+    return set(pd.read_csv(TEST_SET_PATH)["text"].map(dedup_key))
 
 
 def split_dataset(
@@ -87,18 +118,27 @@ def load_pretraining_data(val_size: float = 0.1) -> tuple:
         cache_dir="datasets",
     )
 
+    # The test tweets come from the same feed export, so keep them out of MLM
+    test_keys = test_set_keys()
+    dataset = dataset.filter(lambda x: dedup_key(x["text"]) not in test_keys)
+
     dataframe = preprocess_dataset(dataset)
     return split_dataset(dataframe, val_size=val_size)
 
 
-def load_finetuning_data(val_size: float = 0.1) -> tuple:
+def load_finetuning_data(
+    val_size: float = 0.1, drop_sources: list[str] | None = None
+) -> tuple:
     """
-    Loads and preprocesses the finetuning data and splits it into a training and validation set.
+    Loads and cleans the finetuning data and splits it into a training and validation set.
+    Testing is done on the frozen test set instead, see `load_test_data()`.
 
     Parameters
     ----------
     val_size : float, optional
         The size of the validation set, by default 0.1
+    drop_sources : list[str], optional
+        Sources to leave out, by their short name in `SOURCES`, e.g. ["mattgilgo"]
 
     Returns
     -------
@@ -108,18 +148,35 @@ def load_finetuning_data(val_size: float = 0.1) -> tuple:
 
     # https://huggingface.co/datasets/TimKoornstra/financial-tweets-sentiment
     # 0: neutral, 1: bullish, 2: bearish
-    dataset = load_dataset(
+    dataframe = load_dataset(
         "TimKoornstra/financial-tweets-sentiment",
         split="train",
         cache_dir="datasets",
+    ).to_pandas()
+
+    dataframe = dataframe.rename(columns={"tweet": "text", "sentiment": "label"})
+    dataframe["source"] = dataframe["url"].map(
+        lambda url: next(v for k, v in SOURCES.items() if k in url.lower())
     )
+    if drop_sources:
+        unknown = set(drop_sources) - set(SOURCES.values())
+        if unknown:
+            raise ValueError(f"Unknown sources: {unknown}")
+        dataframe = dataframe[~dataframe["source"].isin(drop_sources)]
 
-    # Rename columns
-    dataset = dataset.rename_column("tweet", "text")
-    dataset = dataset.rename_column("sentiment", "label")
+    # Near-duplicates with conflicting labels are noise, drop every copy
+    dataframe["key"] = dataframe["text"].map(dedup_key)
+    conflicting = dataframe.groupby("key")["label"].transform("nunique") > 1
+    dataframe = dataframe[~conflicting].drop_duplicates(subset=["key"])
 
-    dataframe = preprocess_dataset(dataset)
-    return split_dataset(dataframe, val_size=val_size)
+    # Never train on tweets from the test set
+    dataframe = dataframe[~dataframe["key"].isin(test_set_keys())]
+
+    dataset = preprocess_dataset(Dataset.from_pandas(dataframe, preserve_index=False))
+    split = dataset.cast_column("label", ClassLabel(names=LABELS)).train_test_split(
+        test_size=val_size, seed=42, stratify_by_column="label"
+    )
+    return split["train"], split["test"]
 
 
 def simple_oversample(dataset: Dataset) -> pd.DataFrame:
@@ -146,7 +203,7 @@ def simple_oversample(dataset: Dataset) -> pd.DataFrame:
     dataframe = pd.DataFrame({"text": resampled_texts, "label": resampled_labels})
 
     # To dataset
-    return Dataset.from_pandas(dataframe)
+    return Dataset.from_pandas(dataframe, preserve_index=False)
 
 
 def synonym_oversample(dataset: Dataset) -> pd.DataFrame:
@@ -190,7 +247,7 @@ def synonym_oversample(dataset: Dataset) -> pd.DataFrame:
     dataframe = pd.DataFrame({"text": resampled_texts, "label": resampled_labels})
 
     # To dataset
-    return Dataset.from_pandas(dataframe)
+    return Dataset.from_pandas(dataframe, preserve_index=False)
 
 
 def preprocess_dataset(dataset: Dataset) -> Dataset:
@@ -219,7 +276,7 @@ def preprocess_dataset(dataset: Dataset) -> Dataset:
     dataframe = dataframe[dataframe["text"].apply(lambda x: len(x.split()) > 1)]
 
     # Convert dataframe back to dataset
-    return Dataset.from_pandas(dataframe)
+    return Dataset.from_pandas(dataframe, preserve_index=False)
 
 
 def adjust_labels(dataset):
@@ -289,11 +346,15 @@ def kfold_pretraining_data(k: int = 5) -> tuple:
 
 def load_test_data() -> Dataset:
     """
-    Loads the pretraining test dataset.
+    Loads the frozen test set (labels: 0: neutral, 1: bullish, 2: bearish).
+    The `file` column holds its source (fintwit_crypto, fintwit_stock, fintwit_other).
 
     Returns
     -------
     Dataset
-        The test dataset.
+        The test dataset, with the same preprocessing as the training data.
     """
-    return load_finetuning_data()[0]
+    dataframe = pd.read_csv(TEST_SET_PATH)
+    dataframe["label"] = dataframe["label"].map(LABELS.index)
+    dataframe["text"] = dataframe["text"].apply(preprocess_tweet)
+    return Dataset.from_pandas(dataframe[["text", "label", "file"]])
