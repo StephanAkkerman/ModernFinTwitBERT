@@ -3,7 +3,6 @@
     "base_args": {
         "bf16": true,
         "load_best_model_at_end": true,
-        "save_safetensors": true,
         "optim": "adamw_torch_fused",
         "eval_strategy": "epoch",
         "save_strategy": "epoch",
@@ -17,25 +16,33 @@
             "num_train_epochs": 10,
             "per_device_train_batch_size": 32,
             "per_device_eval_batch_size": 32,
-            "learning_rate": 0.00002,
+            "learning_rate": 2e-05,
             "metric_for_best_model": "eval_loss",
             "greater_is_better": false,
-            "warmup_ratio": 0.2
+            "warmup_steps": 0.2
         }
     },
     "finetune": {
         "model_name": "ModernFinTwitBERT-sentiment",
         "base_model": "answerdotai/ModernBERT-base",
-        "do_hyperopt": true,
+        "do_hyperopt": false,
+        "hyperopt_trials": 20,
+        "max_length": 128,
+        "drop_sources": [
+            "mattgilgo",
+            "yash",
+            "surge_crypto",
+            "surge_stock"
+        ],
         "finetune_args": {
             "num_train_epochs": 2,
-            "per_device_train_batch_size": 256,
-            "per_device_eval_batch_size": 256,
-            "logging_steps": 500,
-            "learning_rate": 0.00005,
+            "per_device_train_batch_size": 32,
+            "per_device_eval_batch_size": 128,
+            "logging_steps": 50,
+            "learning_rate": 5e-05,
             "metric_for_best_model": "f1",
             "greater_is_better": true,
-            "warmup_ratio": 0.4,
+            "warmup_steps": 0.1,
             "weight_decay": 0.01
         }
     }

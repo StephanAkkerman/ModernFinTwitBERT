@@ -1,4 +1,4 @@
-transformers
+transformers>=5.0  # warmup_steps as a ratio (float)
 datasets
 accelerate
 scikit-learn
