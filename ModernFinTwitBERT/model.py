@@ -49,8 +49,11 @@ class ModernFinTwitBERT:
 
         self.hyperopt = self.config[self.mode]["do_hyperopt"]
 
-        # Get the mode-specific args
-        self.mode_args = self.config[self.mode][f"{self.mode}_args"]
+        # Mode-specific args override the shared base args
+        self.mode_args = {
+            **self.config["base_args"],
+            **self.config[self.mode][f"{self.mode}_args"],
+        }
 
         self.model_name = self.config[self.mode]["model_name"]
 
@@ -72,10 +75,13 @@ class ModernFinTwitBERT:
             # Add special tokens
             special_tokens = ["@USER", "[URL]"]
             self.tokenizer.add_tokens(special_tokens)
-            self.model.resize_token_embeddings(len(self.tokenizer))
+            # Keep the vocab a multiple of 64 (as in ModernBERT) for faster matmuls
+            self.model.resize_token_embeddings(
+                len(self.tokenizer), pad_to_multiple_of=64
+            )
 
             # Load the data
-            self.train, self.val, _ = load_pretraining_data()
+            self.train, self.val = load_pretraining_data()
 
         elif self.mode == "finetune":
             # Need to update for our own pretrained model
@@ -111,8 +117,8 @@ class ModernFinTwitBERT:
         # set the wandb project where this run will be logged
         os.environ["WANDB_PROJECT"] = self.model_name
 
-        # save your trained model checkpoint to wandb
-        os.environ["WANDB_LOG_MODEL"] = "checkpoint"  # log all model checkpoints
+        # Upload only the final model; uploading every checkpoint slows training down
+        os.environ["WANDB_LOG_MODEL"] = "end"
 
         # turn off watch to log faster
         os.environ["WANDB_WATCH"] = "false"
@@ -133,20 +139,22 @@ class ModernFinTwitBERT:
             batched=True,
             remove_columns=["text"],
             batch_size=5_000,
-            # num_proc=4,
+            num_proc=os.cpu_count(),
         )
         val = self.val.map(
             self.encode,
             batched=True,
             remove_columns=["text"],
             batch_size=5_000,
-            # num_proc=4,
+            num_proc=os.cpu_count(),
         )
 
         # Use the MLM data collator when pretraining
         if self.mode == "pretrain":
+            # ModernBERT was pretrained with 30% masking
             data_collator = DataCollatorForLanguageModeling(
-                tokenizer=self.tokenizer, mlm_probability=0.15
+                tokenizer=self.tokenizer,
+                mlm_probability=self.config[self.mode].get("mlm_probability", 0.3),
             )
 
         # Compute F1 and accuracy scores when finetuning
@@ -162,11 +170,11 @@ class ModernFinTwitBERT:
             os.environ["WANDB_MODE"] = "disabled"
 
             # Remove "report_to": "wandb" from args
-            self.config["base_args"].pop("report_to", None)
+            self.mode_args.pop("report_to", None)
 
             trainer = Trainer(
                 model=None,
-                args=TrainingArguments(**self.mode_args, **self.config["base_args"]),
+                args=TrainingArguments(**self.mode_args),
                 train_dataset=train,
                 eval_dataset=val,
                 data_collator=data_collator,
@@ -179,16 +187,14 @@ class ModernFinTwitBERT:
                 backend="optuna",
                 n_trials=self.config[self.mode].get("hyperopt_trials", 20),
                 hp_space=optuna_hp_space,
+                # The default objective is the sum of all metrics, not macro F1
+                compute_objective=lambda metrics: metrics["eval_f1"],
             )
 
             print(best_run)
             print(best_run.hyperparameters)
 
-            merged_args = {
-                **self.mode_args,
-                **self.config["base_args"],
-                **best_run.hyperparameters,
-            }
+            merged_args = {**self.mode_args, **best_run.hyperparameters}
 
             trainer = Trainer(
                 model=self.model,
@@ -202,7 +208,7 @@ class ModernFinTwitBERT:
             # Create a Trainer instance, without model_init
             trainer = Trainer(
                 model=self.model,
-                args=TrainingArguments(**self.mode_args, **self.config["base_args"]),
+                args=TrainingArguments(**self.mode_args),
                 train_dataset=train,
                 eval_dataset=val,
                 data_collator=data_collator,
@@ -246,9 +252,6 @@ def optuna_hp_space(trial):
         "num_train_epochs": trial.suggest_int("num_train_epochs", 1, 5),
         "lr_scheduler_type": trial.suggest_categorical(
             "lr_scheduler_type", ["linear", "cosine", "cosine_with_restarts"]
-        ),
-        "optim": trial.suggest_categorical(
-            "optim", ["adamw_torch", "adamw_torch_fused"]
         ),
         "warmup_steps": trial.suggest_int("warmup_steps", 0, 500),
         "weight_decay": trial.suggest_float("weight_decay", 0.0, 0.3),
