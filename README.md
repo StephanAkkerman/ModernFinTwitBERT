@@ -71,7 +71,7 @@ print(f"Predicted sentiment: {predicted_class}")
 `ModernFinTwitBERT/benchmark.py` scores models on the frozen tweet test set (`data/test/test_v0.csv`). The models are listed in `benchmark.json`:
 
 - `"base"`: a pretrained model (Hugging Face id or local path) that is fine-tuned on our sentiment data with the recipe in `config.json`, once per seed in `"seeds"`, then scored. Use this to compare starting points, such as ModernBERT-base against a finance-pretrained ModernBERT or our own domain-pretrained model.
-- `"classifier"`: an existing sentiment model that is scored as is, such as our released model or other people's. Add a `"label_map"` when its labels are not neutral/bullish/bearish or positive/negative.
+- `"classifier"`: an existing sentiment model that is scored as is, such as our released model or other people's. Add a `"label_map"` when its labels are not neutral/bullish/bearish or positive/negative, and a `"tokenizer"` when the model was uploaded without one.
 
 `"finetune_args"` (top level, or per model) overrides the fine-tuning arguments in `config.json`. Run from the repository root:
 

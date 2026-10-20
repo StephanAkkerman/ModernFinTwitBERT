@@ -68,7 +68,12 @@ def score(df: pd.DataFrame, bootstrap: int = 1000) -> dict:
 
 
 class Evaluate:
-    def __init__(self, model_name: str | None = None, label_map: dict | None = None):
+    def __init__(
+        self,
+        model_name: str | None = None,
+        label_map: dict | None = None,
+        tokenizer: str | None = None,
+    ):
         # Defaults to our own finetuned model
         if model_name is None:
             with open("config.json", "r") as config_file:
@@ -82,6 +87,8 @@ class Evaluate:
         self.pipeline = pipeline(
             "text-classification",
             model=self.model_name,
+            # For models uploaded without tokenizer files, e.g. "answerdotai/ModernBERT-base"
+            tokenizer=tokenizer,
             truncation=True,
             max_length=128,
         )

@@ -24,7 +24,8 @@
         },
         {
             "name": "modernbert-phrasebank",
-            "classifier": "maguid28/modernbert-financial-phrasebank"
+            "classifier": "maguid28/modernbert-financial-phrasebank",
+            "tokenizer": "answerdotai/ModernBERT-base"
         },
         {
             "name": "modernbert-financial-news",

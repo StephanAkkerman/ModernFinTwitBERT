@@ -6,7 +6,8 @@ Two kinds of entries in benchmark.json:
   data with the recipe in config.json, once per seed, then scored. Use this to compare
   starting points, e.g. ModernBERT-base vs a finance-pretrained ModernBERT.
 - "classifier": an existing sentiment model that is scored as-is, e.g. our released
-  model or other people's. "label_map" maps its labels onto neutral/bullish/bearish.
+  model or other people's. "label_map" maps its labels onto neutral/bullish/bearish,
+  and "tokenizer" names one for models uploaded without tokenizer files.
 
 Runs already in the results file are skipped, so adding a model to benchmark.json and
 rerunning only runs the new one. Run from the repository root:
@@ -104,8 +105,8 @@ def finetune(base: str, seed: int, out: Path, data: tuple, config: dict, overrid
         shutil.rmtree(checkpoint)
 
 
-def test_scores(model_path: str, label_map: dict | None) -> dict:
-    evaluator = Evaluate(model_path, label_map)
+def test_scores(model_path: str, label_map: dict | None, tokenizer: str | None) -> dict:
+    evaluator = Evaluate(model_path, label_map, tokenizer)
     df = evaluator.predict()
     unknown = set(df["pred"]) - set(LABELS)
     if unknown:
@@ -190,7 +191,9 @@ def main():
                 finetune(model, seed, model_path, data, config, overrides)
 
             row = {"name": name, "kind": kind, "model": model, "seed": seed}
-            row.update(test_scores(str(model_path), entry.get("label_map")))
+            row.update(
+                test_scores(str(model_path), entry.get("label_map"), entry.get("tokenizer"))
+            )
             results = pd.concat([results, pd.DataFrame([row])], ignore_index=True)
             results.to_csv(results_path, index=False)
             print(f"macro F1 {row['test/macro_f1']:.3f}")
