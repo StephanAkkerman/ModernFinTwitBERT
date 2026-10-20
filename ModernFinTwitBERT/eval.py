@@ -34,14 +34,50 @@ def expected_calibration_error(
     return float(ece)
 
 
+def score(df: pd.DataFrame, bootstrap: int = 1000) -> dict:
+    """
+    Test-set metrics from a frame with label, pred, confidence and file columns.
+
+    The macro F1 95% interval comes from resampling the test tweets, so differences
+    between models that fall inside it are likely noise.
+    """
+    correct = (df["label"] == df["pred"]).to_numpy()
+    report = classification_report(
+        df["label"], df["pred"], labels=LABELS, output_dict=True, zero_division=0
+    )
+    output = {
+        "test/macro_f1": f1_score(df["label"], df["pred"], labels=LABELS, average="macro"),
+        "test/accuracy": correct.mean(),
+        "test/precision_bullish": report["bullish"]["precision"],
+        "test/precision_bearish": report["bearish"]["precision"],
+        "test/recall_neutral": report["neutral"]["recall"],
+        "test/ece": expected_calibration_error(df["confidence"].to_numpy(), correct),
+    }
+    if bootstrap:
+        rng = np.random.default_rng(0)
+        labels, preds = df["label"].to_numpy(), df["pred"].to_numpy()
+        samples = [
+            f1_score(labels[i], preds[i], labels=LABELS, average="macro")
+            for i in rng.integers(0, len(df), (bootstrap, len(df)))
+        ]
+        output["test/macro_f1_low"], output["test/macro_f1_high"] = np.percentile(
+            samples, [2.5, 97.5]
+        )
+    for source, acc in df.assign(ok=correct).groupby("file")["ok"].mean().items():
+        output[f"test/accuracy_{source}"] = acc
+    return output
+
+
 class Evaluate:
-    def __init__(self, model_name: str | None = None):
+    def __init__(self, model_name: str | None = None, label_map: dict | None = None):
         # Defaults to our own finetuned model
         if model_name is None:
             with open("config.json", "r") as config_file:
                 config = json.load(config_file)
             model_name = f"output/{config['finetune']['model_name']}"
         self.model_name = BASELINES.get(model_name, model_name)
+        # Raw model label -> neutral/bullish/bearish, for models with other label names
+        self.label_map = label_map or {}
 
         # https://huggingface.co/docs/transformers/main_classes/pipelines#transformers.pipeline
         self.pipeline = pipeline(
@@ -57,25 +93,18 @@ class Evaluate:
         df["label"] = df["label"].map(dict(enumerate(LABELS)))
 
         outputs = list(self.pipeline(KeyDataset(dataset, "text"), batch_size=batch_size))
-        df["pred"] = [ALIASES.get(o["label"].lower(), o["label"].lower()) for o in outputs]
+        df["pred"] = [self.map_label(o["label"]) for o in outputs]
         df["confidence"] = [o["score"] for o in outputs]
         return df
 
+    def map_label(self, label: str) -> str:
+        if label in self.label_map:
+            return self.label_map[label]
+        return ALIASES.get(label.lower(), label.lower())
+
     def evaluate_model(self) -> dict:
         df = self.predict()
-        correct = (df["label"] == df["pred"]).to_numpy()
-        report = classification_report(
-            df["label"], df["pred"], labels=LABELS, output_dict=True, zero_division=0
-        )
-        output = {
-            "test/macro_f1": f1_score(df["label"], df["pred"], labels=LABELS, average="macro"),
-            "test/accuracy": correct.mean(),
-            "test/precision_bullish": report["bullish"]["precision"],
-            "test/precision_bearish": report["bearish"]["precision"],
-            "test/ece": expected_calibration_error(df["confidence"].to_numpy(), correct),
-        }
-        for source, acc in df.assign(ok=correct).groupby("file")["ok"].mean().items():
-            output[f"test/accuracy_{source}"] = acc
+        output = score(df)
 
         print(f"model: {self.model_name}  rows: {len(df)}")
         print(classification_report(df["label"], df["pred"], labels=LABELS, digits=3, zero_division=0))
