@@ -1,6 +1,7 @@
 # > Imports
 # Standard library
 import html
+import os
 import random
 import re
 from collections import Counter
@@ -106,15 +107,20 @@ def split_dataset(
     return split_ds["train"], split_temp["train"], split_temp["test"]
 
 
-def load_pretraining_data(val_size: float = 0.1) -> tuple:
+def load_pretraining_data(val_size: int = 10_000) -> tuple:
     """
-    Loads all the pretraining datasets from the data/pretrain/preprocessed folder.
-    Excluding the test dataset.
+    Loads the pretraining tweets, without the tweets of the frozen test set.
+
+    Parameters
+    ----------
+    val_size : int, optional
+        Number of tweets held out to track the MLM loss, by default 10,000.
+        A small fixed set is enough; everything else is used for training.
 
     Returns
     -------
-    pd.DataFrame
-        The complete pretraining dataset as a pandas DataFrame.
+    tuple
+        The training and validation datasets (validation is None if val_size is 0).
     """
     dataset = load_dataset(
         "StephanAkkerman/crypto-stock-tweets",
@@ -124,10 +130,15 @@ def load_pretraining_data(val_size: float = 0.1) -> tuple:
 
     # The test tweets come from the same feed export, so keep them out of MLM
     test_keys = test_set_keys()
-    dataset = dataset.filter(lambda x: dedup_key(x["text"]) not in test_keys)
+    dataset = dataset.filter(
+        lambda x: dedup_key(x["text"]) not in test_keys, num_proc=os.cpu_count()
+    )
 
-    dataframe = preprocess_dataset(dataset)
-    return split_dataset(dataframe, val_size=val_size)
+    dataset = preprocess_dataset(dataset)
+    if not val_size:
+        return dataset, None
+    split = dataset.train_test_split(test_size=val_size, seed=42)
+    return split["train"], split["test"]
 
 
 def load_finetuning_data(
@@ -279,8 +290,8 @@ def preprocess_dataset(dataset: Dataset) -> Dataset:
     # Preprocess tweets
     dataframe["text"] = dataframe["text"].apply(preprocess_tweet)
 
-    # Drop duplicates
-    dataframe = dataframe.drop_duplicates(subset=["text"])
+    # Drop near-duplicates (same tweet with another link or mention), common in bot tweets
+    dataframe = dataframe[~dataframe["text"].map(dedup_key).duplicated()]
 
     # Drop empty text tweets
     dataframe = dataframe.dropna(subset=["text"])
