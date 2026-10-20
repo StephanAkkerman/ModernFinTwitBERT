@@ -1,0 +1,40 @@
+{
+    "seeds": [
+        42,
+        43,
+        44
+    ],
+    "finetune_args": {},
+    "models": [
+        {
+            "name": "modernbert-base",
+            "base": "answerdotai/ModernBERT-base"
+        },
+        {
+            "name": "fin-modernbert",
+            "base": "clapAI/Fin-ModernBERT"
+        },
+        {
+            "name": "fintwitbert-sentiment",
+            "classifier": "StephanAkkerman/FinTwitBERT-sentiment"
+        },
+        {
+            "name": "finbert",
+            "classifier": "ProsusAI/finbert"
+        },
+        {
+            "name": "modernbert-phrasebank",
+            "classifier": "maguid28/modernbert-financial-phrasebank",
+            "tokenizer": "answerdotai/ModernBERT-base"
+        },
+        {
+            "name": "modernbert-financial-news",
+            "classifier": "mrm8488/ModernBERT-base-ft-financial-news-sentiment-analysis",
+            "label_map": {
+                "0": "bearish",
+                "1": "neutral",
+                "2": "bullish"
+            }
+        }
+    ]
+}

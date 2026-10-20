@@ -66,6 +66,22 @@ print(f"Predicted sentiment: {predicted_class}")
 >    Tip: Label mappings and sentiment categories are defined in the config or id2label dictionary of the model.
 
 
+## Benchmark 📊
+
+`ModernFinTwitBERT/benchmark.py` scores models on the frozen tweet test set (`data/test/test_v0.csv`). The models are listed in `benchmark.json`:
+
+- `"base"`: a pretrained model (Hugging Face id or local path) that is fine-tuned on our sentiment data with the recipe in `config.json`, once per seed in `"seeds"`, then scored. Use this to compare starting points, such as ModernBERT-base against a finance-pretrained ModernBERT or our own domain-pretrained model.
+- `"classifier"`: an existing sentiment model that is scored as is, such as our released model or other people's. Add a `"label_map"` when its labels are not neutral/bullish/bearish or positive/negative, and a `"tokenizer"` when the model was uploaded without one.
+
+`"finetune_args"` (top level, or per model) overrides the fine-tuning arguments in `config.json`. Run from the repository root:
+
+```bash
+python ModernFinTwitBERT/benchmark.py
+python ModernFinTwitBERT/benchmark.py --only fin-modernbert   # run one entry
+```
+
+Every run is appended to `output/benchmark/results.csv` and runs already there are skipped, so adding a model to `benchmark.json` and rerunning only runs the new one. `output/benchmark/summary.md` has the mean and standard deviation over seeds per model. `macro_f1_low`/`macro_f1_high` is a 95% bootstrap interval over the test tweets: differences inside it are likely noise.
+
 ## Citation ✍️
 <!-- Be sure to adjust everything here so it matches your name and repo -->
 If you use this project in your research, please cite as follows:
