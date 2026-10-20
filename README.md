@@ -80,7 +80,7 @@ python ModernFinTwitBERT/benchmark.py
 python ModernFinTwitBERT/benchmark.py --only fin-modernbert   # run one entry
 ```
 
-Every run is appended to `output/benchmark/results.csv` and runs already there are skipped, so adding a model to `benchmark.json` and rerunning only runs the new one. `output/benchmark/summary.md` has the mean and standard deviation over seeds per model. `macro_f1_low`/`macro_f1_high` is a 95% bootstrap interval over the test tweets: differences inside it are likely noise.
+Every run is appended to `output/benchmark/results.csv` and runs already there are skipped, so adding a model to `benchmark.json` and rerunning only runs the new one. Add `--rerun` to run the selected entries again from scratch. `output/benchmark/summary.md` has the mean and standard deviation over seeds per model. `macro_f1_low`/`macro_f1_high` is a 95% bootstrap interval over the test tweets: differences inside it are likely noise.
 
 ## Citation ✍️
 <!-- Be sure to adjust everything here so it matches your name and repo -->

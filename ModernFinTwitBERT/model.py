@@ -63,7 +63,7 @@ class ModernFinTwitBERT:
         if self.mode == "pretrain":
             self.model = ModernBertForMaskedLM.from_pretrained(
                 self.config[self.mode]["base_model"],
-                torch_dtype="auto",
+                dtype=torch.float32,  # bf16 autocast comes from the bf16 training arg
                 cache_dir="models",
                 **DEVICE_ARGS,
             )
@@ -235,7 +235,7 @@ class ModernFinTwitBERT:
             num_labels=len(self.labels),
             id2label={k: v for k, v in enumerate(self.labels)},
             label2id={v: k for k, v in enumerate(self.labels)},
-            torch_dtype="auto",
+            dtype=torch.float32,  # bf16 autocast comes from the bf16 training arg
             cache_dir="models",
             **DEVICE_ARGS,
         )

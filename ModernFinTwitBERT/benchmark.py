@@ -52,7 +52,9 @@ def load_base_model(base: str):
         num_labels=len(labels),
         id2label=dict(enumerate(labels)),
         label2id={label: i for i, label in enumerate(labels)},
-        dtype="auto",
+        # Train in float32 with bf16 autocast; checkpoints saved in bf16 (e.g. Fin-ModernBERT)
+        # would otherwise be trained in pure bf16, which loses most small weight updates
+        dtype=torch.float32,
         cache_dir="models",
         # Allows starting from a model that already has a classifier head
         ignore_mismatched_sizes=True,
@@ -146,6 +148,11 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark models on the frozen test set")
     parser.add_argument("--config", default="benchmark.json")
     parser.add_argument("--only", nargs="+", help="Only run these entries, by name")
+    parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help="Drop earlier results of the selected entries and run them again",
+    )
     args = parser.parse_args()
 
     with open(args.config) as file:
@@ -156,6 +163,9 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     results_path = OUTPUT_DIR / "results.csv"
     results = pd.read_csv(results_path) if results_path.exists() else pd.DataFrame()
+    if args.rerun and len(results):
+        names = args.only or [entry["name"] for entry in benchmark["models"]]
+        results = results[~results["name"].isin(names)]
     done = set(zip(results["name"], results["seed"])) if len(results) else set()
 
     seeds = benchmark.get("seeds", [42])
