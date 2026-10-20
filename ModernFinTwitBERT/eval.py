@@ -103,7 +103,9 @@ class Evaluate:
         df["confidence"] = [o["score"] for o in outputs]
         return df
 
-    def map_label(self, label: str) -> str:
+    def map_label(self, label) -> str:
+        # Some models have numbers as label names
+        label = str(label)
         if label in self.label_map:
             return self.label_map[label]
         return ALIASES.get(label.lower(), label.lower())
