@@ -28,6 +28,7 @@
         "do_hyperopt": false,
         "hyperopt_trials": 20,
         "max_length": 128,
+        "relabel": true,
         "drop_sources": [
             "mattgilgo",
             "yash",

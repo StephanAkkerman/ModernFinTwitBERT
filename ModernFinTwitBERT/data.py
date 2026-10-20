@@ -17,6 +17,10 @@ from datasets import ClassLabel, Dataset, concatenate_datasets, load_dataset
 TEST_SET_PATH = Path(__file__).parent.parent / "data" / "test" / "test_v0.csv"
 LABELS = ["neutral", "bullish", "bearish"]
 
+# The directional tweets of the moritz, pooja, fiqa, zeroshot and ieee sources, relabeled
+# by hand to the same guideline as the test set (columns: tweet, label). Most become neutral.
+RELABELS_PATH = Path(__file__).parent.parent / "data" / "train" / "relabels_v1.csv"
+
 # Short names for the sources in TimKoornstra/financial-tweets-sentiment (url column)
 SOURCES = {
     "moritzwilksch": "moritz",
@@ -127,7 +131,7 @@ def load_pretraining_data(val_size: float = 0.1) -> tuple:
 
 
 def load_finetuning_data(
-    val_size: float = 0.1, drop_sources: list[str] | None = None
+    val_size: float = 0.1, drop_sources: list[str] | None = None, relabel: bool = True
 ) -> tuple:
     """
     Loads and cleans the finetuning data and splits it into a training and validation set.
@@ -139,6 +143,8 @@ def load_finetuning_data(
         The size of the validation set, by default 0.1
     drop_sources : list[str], optional
         Sources to leave out, by their short name in `SOURCES`, e.g. ["mattgilgo"]
+    relabel : bool, optional
+        Replace labels with the guideline relabels in `RELABELS_PATH`, by default True
 
     Returns
     -------
@@ -168,6 +174,13 @@ def load_finetuning_data(
     dataframe["key"] = dataframe["text"].map(dedup_key)
     conflicting = dataframe.groupby("key")["label"].transform("nunique") > 1
     dataframe = dataframe[~conflicting].drop_duplicates(subset=["key"])
+
+    if relabel:
+        relabels = pd.read_csv(RELABELS_PATH)
+        new_label = dict(
+            zip(relabels["tweet"].map(dedup_key), relabels["label"].map(LABELS.index))
+        )
+        dataframe["label"] = dataframe["key"].map(new_label).fillna(dataframe["label"]).astype(int)
 
     # Never train on tweets from the test set
     dataframe = dataframe[~dataframe["key"].isin(test_set_keys())]
