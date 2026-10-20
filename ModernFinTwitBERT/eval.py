@@ -15,7 +15,6 @@ import wandb
 BASELINES = {
     "fintwitbert": "StephanAkkerman/FinTwitBERT-sentiment",
     "finbert": "ProsusAI/finbert",
-    "finbert-tone": "yiyanghkust/finbert-tone",
 }
 # Map other label names onto ours (e.g. finbert's positive/negative)
 ALIASES = {"positive": "bullish", "negative": "bearish"}

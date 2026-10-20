@@ -1,5 +1,9 @@
 {
-    "seeds": [42, 43, 44],
+    "seeds": [
+        42,
+        43,
+        44
+    ],
     "finetune_args": {},
     "models": [
         {
@@ -19,17 +23,17 @@
             "classifier": "ProsusAI/finbert"
         },
         {
-            "name": "finbert-tone",
-            "classifier": "yiyanghkust/finbert-tone"
-        },
-        {
             "name": "modernbert-phrasebank",
             "classifier": "maguid28/modernbert-financial-phrasebank"
         },
         {
             "name": "modernbert-financial-news",
             "classifier": "mrm8488/ModernBERT-base-ft-financial-news-sentiment-analysis",
-            "label_map": {"0": "bearish", "1": "neutral", "2": "bullish"}
+            "label_map": {
+                "0": "bearish",
+                "1": "neutral",
+                "2": "bullish"
+            }
         }
     ]
 }
