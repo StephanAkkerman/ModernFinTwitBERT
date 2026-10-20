@@ -2,7 +2,9 @@ transformers>=5.0  # warmup_steps as a ratio (float)
 datasets
 accelerate
 scikit-learn
-flash-attn
+flash-attn; sys_platform == "linux"
 matplotlib
 seaborn
 wandb
+torch --index-url https://download.pytorch.org/whl/cu132
+dotenv
