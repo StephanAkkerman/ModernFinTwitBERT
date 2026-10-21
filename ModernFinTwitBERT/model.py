@@ -56,13 +56,13 @@ def compute_metrics(eval_pred):
 
 
 class ModernFinTwitBERT:
-    def __init__(self, max_steps: int | None = None):
+    def __init__(self, max_steps: int | None = None, mode: str | None = None):
         # Read model args from config.json
         with open("config.json", "r") as config_file:
             self.config = json.load(config_file)
 
         # Set the mode (finetune or pretrain)
-        self.mode = self.config["mode"]
+        self.mode = mode or self.config["mode"]
 
         self.hyperopt = self.config[self.mode]["do_hyperopt"]
 
@@ -314,4 +314,8 @@ if __name__ == "__main__":
         type=int,
         help="Stop after this many steps without saving, to test speed and memory",
     )
-    ModernFinTwitBERT(parser.parse_args().max_steps).trainer()
+    parser.add_argument(
+        "--mode", choices=["pretrain", "finetune"], help="Overrides mode in config.json"
+    )
+    args = parser.parse_args()
+    ModernFinTwitBERT(args.max_steps, args.mode).trainer()

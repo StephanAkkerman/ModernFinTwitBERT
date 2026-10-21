@@ -72,6 +72,7 @@ Training is configured in `config.json` and run from the repository root with `p
 
 1. **Domain pretraining:** set `"mode": "pretrain"`. This continues masked-language-model training on `StephanAkkerman/crypto-stock-tweets` (with the test tweets removed) and saves to `output/<pretrain model_name>`. One epoch takes a few hours on an A100.
 
+   - On a rented GPU, `scripts/pretrain_remote.sh` does all of this: it installs the requirements (without flash-attn, which RoBERTa does not use), runs a 50-step trial, then the full run, and uploads the model to a private Hugging Face repo if `HF_REPO` is set.
    - Start with `python ModernFinTwitBERT/model.py --max-steps 50`: a short trial run that saves nothing, to check speed and memory on a new GPU.
    - The cleaned tweets are cached in `datasets/pretrain_clean`. Delete that folder after changing the cleaning or the test set.
    - Checkpoints go to `output/checkpoints/<model_name>`. Running the same command again resumes from the last one.
