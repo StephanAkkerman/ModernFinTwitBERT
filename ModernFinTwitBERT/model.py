@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from functools import partial
 
 import numpy as np
 import torch
@@ -33,6 +34,11 @@ def load_pretrained(auto_class, name: str, **kwargs):
     except (ValueError, ImportError):
         device_map = "cuda" if torch.cuda.is_available() else None
         return auto_class.from_pretrained(name, **kwargs, device_map=device_map)
+
+
+def encode(batch, tokenizer, max_length):
+    # Tweets are short: truncate at max_length and pad per batch in the collator
+    return tokenizer(batch["text"], truncation=True, max_length=max_length)
 
 
 def compute_metrics(eval_pred):
@@ -146,26 +152,24 @@ class ModernFinTwitBERT:
         # turn off watch to log faster
         os.environ["WANDB_WATCH"] = "false"
 
-    def encode(self, batch):
-        # Tweets are short: truncate at max_length and pad per batch in the collator
-        return self.tokenizer(
-            batch["text"], truncation=True, max_length=self.max_length
-        )
-
     def trainer(self):
         data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
 
-        # Encode the data
+        # Encode the data. A plain function, not a method: datasets pickles it for every
+        # worker, and pickling `self` would copy the whole model into each of them
+        encode_batch = partial(
+            encode, tokenizer=self.tokenizer, max_length=self.max_length
+        )
         # changing batch_size does not seem to change the speed
         train = self.train.map(
-            self.encode,
+            encode_batch,
             batched=True,
             remove_columns=["text"],
             batch_size=5_000,
             num_proc=os.cpu_count(),
         )
         val = self.val.map(
-            self.encode,
+            encode_batch,
             batched=True,
             remove_columns=["text"],
             batch_size=5_000,
