@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 
@@ -15,6 +16,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.trainer_utils import get_last_checkpoint
 
 # flash-attn only works on GPU; fall back to PyTorch attention elsewhere
 DEVICE_ARGS = (
@@ -48,7 +50,7 @@ def compute_metrics(eval_pred):
 
 
 class ModernFinTwitBERT:
-    def __init__(self):
+    def __init__(self, max_steps: int | None = None):
         # Read model args from config.json
         with open("config.json", "r") as config_file:
             self.config = json.load(config_file)
@@ -65,6 +67,14 @@ class ModernFinTwitBERT:
         }
 
         self.model_name = self.config[self.mode]["model_name"]
+
+        # Checkpoints per model, so a crashed or interrupted run can resume
+        self.mode_args.setdefault("output_dir", f"output/checkpoints/{self.model_name}")
+        if max_steps:
+            # Short trial run, e.g. to measure speed and memory on a new GPU
+            self.mode_args["max_steps"] = max_steps
+            self.mode_args["save_strategy"] = "no"
+            self.mode_args["load_best_model_at_end"] = False
 
         self.labels = ["NEUTRAL", "BULLISH", "BEARISH"]
 
@@ -227,11 +237,20 @@ class ModernFinTwitBERT:
                 compute_metrics=compute_metrics_fn,
             )
 
-        print("Starting training")
+        checkpoint = get_last_checkpoint(self.mode_args["output_dir"])
+        if checkpoint and not self.mode_args.get("max_steps"):
+            print(f"Resuming from {checkpoint}")
+        else:
+            checkpoint = None
+            print("Starting training")
 
-        trainer.train()
+        trainer.train(resume_from_checkpoint=checkpoint)
 
         print("Finished training")
+
+        if self.mode_args.get("max_steps"):
+            print("Trial run finished, not saving the model")
+            return
 
         # Save the model
         trainer.save_model(self.output_dir)
@@ -271,4 +290,10 @@ def optuna_hp_space(trial):
 
 
 if __name__ == "__main__":
-    ModernFinTwitBERT().trainer()
+    parser = argparse.ArgumentParser(description="Pretrain or fine-tune, see config.json")
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        help="Stop after this many steps without saving, to test speed and memory",
+    )
+    ModernFinTwitBERT(parser.parse_args().max_steps).trainer()

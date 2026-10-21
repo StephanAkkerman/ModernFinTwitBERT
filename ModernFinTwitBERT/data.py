@@ -1,5 +1,6 @@
 # > Imports
 # Standard library
+import hashlib
 import html
 import os
 import random
@@ -17,6 +18,9 @@ from datasets import ClassLabel, Dataset, concatenate_datasets, load_dataset
 # after 2023-08-01, labeled with one guideline. Never train or tune on it.
 TEST_SET_PATH = Path(__file__).parent.parent / "data" / "test" / "test_v0.csv"
 LABELS = ["neutral", "bullish", "bearish"]
+
+# Cleaned pretraining tweets; delete it after changing the cleaning or the test set
+PRETRAIN_CACHE = Path("datasets") / "pretrain_clean"
 
 # The directional tweets of the moritz, pooja, fiqa, zeroshot and ieee sources, relabeled
 # by hand to the same guideline as the test set (columns: tweet, label). Most become neutral.
@@ -122,23 +126,62 @@ def load_pretraining_data(val_size: int = 10_000) -> tuple:
     tuple
         The training and validation datasets (validation is None if val_size is 0).
     """
-    dataset = load_dataset(
-        "StephanAkkerman/crypto-stock-tweets",
-        split="train",
-        cache_dir="datasets",
-    )
+    # Cleaning 8M tweets takes a while, so reuse the result on a rerun or resume
+    if PRETRAIN_CACHE.exists():
+        dataset = Dataset.load_from_disk(str(PRETRAIN_CACHE))
+    else:
+        dataset = load_dataset(
+            "StephanAkkerman/crypto-stock-tweets",
+            split="train",
+            cache_dir="datasets",
+        )
 
-    # The test tweets come from the same feed export, so keep them out of MLM
-    test_keys = test_set_keys()
-    dataset = dataset.filter(
-        lambda x: dedup_key(x["text"]) not in test_keys, num_proc=os.cpu_count()
-    )
+        # The test tweets come from the same feed export, so keep them out of MLM
+        test_keys = test_set_keys()
+        dataset = dataset.filter(
+            lambda x: dedup_key(x["text"]) not in test_keys, num_proc=os.cpu_count()
+        )
 
-    dataset = preprocess_dataset(dataset)
+        dataset = clean_pretraining_tweets(dataset)
+        dataset.save_to_disk(str(PRETRAIN_CACHE))
     if not val_size:
         return dataset, None
     split = dataset.train_test_split(test_size=val_size, seed=42)
     return split["train"], split["test"]
+
+
+def clean_pretraining_tweets(dataset: Dataset) -> Dataset:
+    """
+    The same cleaning as `preprocess_dataset`, but in Arrow instead of pandas:
+    pandas needs more than 15 GB of RAM for the 8M pretraining tweets.
+    """
+    dataset = dataset.filter(lambda x: x["text"] is not None, num_proc=os.cpu_count())
+
+    def clean(batch):
+        texts = [preprocess_tweet(text) for text in batch["text"]]
+        # A stable hash of the near-duplicate key (Python's hash() differs per process)
+        keys = [
+            int.from_bytes(
+                hashlib.blake2b(dedup_key(text).encode(), digest_size=8).digest(),
+                signed=True,
+            )
+            for text in texts
+        ]
+        return {"text": texts, "key": keys}
+
+    dataset = dataset.map(
+        clean,
+        batched=True,
+        remove_columns=dataset.column_names,
+        num_proc=os.cpu_count(),
+    )
+
+    # Keep the first tweet of each near-duplicate group
+    _, first = np.unique(np.asarray(dataset["key"], dtype=np.int64), return_index=True)
+    dataset = dataset.select(np.sort(first)).remove_columns("key")
+
+    # Drop 1 word tweets
+    return dataset.filter(lambda x: len(x["text"].split()) > 1, num_proc=os.cpu_count())
 
 
 def load_finetuning_data(
