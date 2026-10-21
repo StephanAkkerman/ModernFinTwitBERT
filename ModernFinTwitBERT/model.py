@@ -135,6 +135,14 @@ class ModernFinTwitBERT:
         # Check if a .env file exists
         if not os.path.exists("wandb.env"):
             print("No wandb.env file found")
+            # Without a key wandb stops the run, so a fresh GPU box would fail at step 0
+            netrc = os.path.expanduser("~/.netrc")
+            logged_in = "WANDB_API_KEY" in os.environ or (
+                os.path.exists(netrc) and "api.wandb.ai" in open(netrc).read()
+            )
+            if not logged_in and self.mode_args.get("report_to") == "wandb":
+                print("Not logged in to wandb, so not logging the run there")
+                self.mode_args["report_to"] = "none"
             return
 
         # Load the .env file
@@ -241,6 +249,11 @@ class ModernFinTwitBERT:
                 data_collator=data_collator,
                 compute_metrics=compute_metrics_fn,
             )
+
+        # RoBERTa accepts **kwargs, so Trainer assumes it normalizes the loss over the
+        # accumulated batches itself; it does not, which multiplied the loss and the
+        # gradients by gradient_accumulation_steps. This makes Trainer average them.
+        trainer.model_accepts_loss_kwargs = False
 
         checkpoint = get_last_checkpoint(self.mode_args["output_dir"])
         if checkpoint and not self.trial:
