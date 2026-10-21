@@ -15,6 +15,61 @@
             "base": "clapAI/Fin-ModernBERT"
         },
         {
+            "name": "ettin-150m",
+            "base": "jhu-clsp/ettin-encoder-150m"
+        },
+        {
+            "name": "twitter-roberta-base-2022",
+            "base": "cardiffnlp/twitter-roberta-base-2022-154m"
+        },
+        {
+            "name": "bertweet-base",
+            "base": "vinai/bertweet-base"
+        },
+        {
+            "name": "deberta-v3-base",
+            "base": "microsoft/deberta-v3-base"
+        },
+        {
+            "name": "fintwitbert",
+            "base": "StephanAkkerman/FinTwitBERT"
+        },
+        {
+            "name": "modernbert-large",
+            "base": "answerdotai/ModernBERT-large",
+            "finetune_args": {
+                "learning_rate": 2e-05
+            }
+        },
+        {
+            "name": "ettin-400m",
+            "base": "jhu-clsp/ettin-encoder-400m",
+            "finetune_args": {
+                "learning_rate": 2e-05
+            }
+        },
+        {
+            "name": "fin-modernbert-large",
+            "base": "BatuhanECB/FinModernBERT-large-DAPT",
+            "finetune_args": {
+                "learning_rate": 2e-05
+            }
+        },
+        {
+            "name": "twitter-roberta-large-2022",
+            "base": "cardiffnlp/twitter-roberta-large-2022-154m",
+            "finetune_args": {
+                "learning_rate": 2e-05
+            }
+        },
+        {
+            "name": "deberta-v3-large",
+            "base": "microsoft/deberta-v3-large",
+            "finetune_args": {
+                "learning_rate": 2e-05
+            }
+        },
+        {
             "name": "fintwitbert-sentiment",
             "classifier": "StephanAkkerman/FinTwitBERT-sentiment"
         },
@@ -35,6 +90,10 @@
                 "1": "neutral",
                 "2": "bullish"
             }
+        },
+        {
+            "name": "cryptobert",
+            "classifier": "ElKulako/cryptobert"
         }
     ]
 }
