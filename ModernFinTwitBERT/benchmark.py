@@ -23,7 +23,6 @@ from pathlib import Path
 
 import pandas as pd
 import torch
-from data import LABELS, load_finetuning_data
 from eval import Evaluate, score
 from model import DEVICE_ARGS, compute_metrics
 from transformers import (
@@ -33,6 +32,8 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+
+from data import LABELS, load_finetuning_data
 
 OUTPUT_DIR = Path("output/benchmark")
 SUMMARY_COLUMNS = [
@@ -72,7 +73,9 @@ def load_base_model(base: str):
     return model
 
 
-def finetune(base: str, seed: int, out: Path, data: tuple, config: dict, overrides: dict):
+def finetune(
+    base: str, seed: int, out: Path, data: tuple, config: dict, overrides: dict
+):
     """Fine-tune `base` with the config.json recipe and save the best checkpoint to `out`."""
     tokenizer = AutoTokenizer.from_pretrained(base, cache_dir="models")
     max_length = config["finetune"].get("max_length", 128)
@@ -80,7 +83,9 @@ def finetune(base: str, seed: int, out: Path, data: tuple, config: dict, overrid
     def encode(batch):
         return tokenizer(batch["text"], truncation=True, max_length=max_length)
 
-    train, val = (split.map(encode, batched=True, remove_columns=["text"]) for split in data)
+    train, val = (
+        split.map(encode, batched=True, remove_columns=["text"]) for split in data
+    )
 
     args = {
         **config["base_args"],
@@ -145,7 +150,18 @@ def summarize(results: pd.DataFrame) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Benchmark models on the frozen test set")
+    # Check GPU availability and memory
+    if torch.cuda.is_available():
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+        print(
+            f"GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB"
+        )
+    else:
+        print("No GPU available; using CPU")
+
+    parser = argparse.ArgumentParser(
+        description="Benchmark models on the frozen test set"
+    )
     parser.add_argument("--config", default="benchmark.json")
     parser.add_argument("--only", nargs="+", help="Only run these entries, by name")
     parser.add_argument(
@@ -202,7 +218,9 @@ def main():
 
             row = {"name": name, "kind": kind, "model": model, "seed": seed}
             row.update(
-                test_scores(str(model_path), entry.get("label_map"), entry.get("tokenizer"))
+                test_scores(
+                    str(model_path), entry.get("label_map"), entry.get("tokenizer")
+                )
             )
             results = pd.concat([results, pd.DataFrame([row])], ignore_index=True)
             results.to_csv(results_path, index=False)
