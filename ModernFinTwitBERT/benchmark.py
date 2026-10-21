@@ -24,7 +24,7 @@ from pathlib import Path
 import pandas as pd
 import torch
 from eval import Evaluate, score
-from model import DEVICE_ARGS, compute_metrics
+from model import compute_metrics, load_pretrained
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -60,15 +60,7 @@ def load_base_model(base: str):
         # Allows starting from a model that already has a classifier head
         ignore_mismatched_sizes=True,
     )
-    try:
-        model = AutoModelForSequenceClassification.from_pretrained(
-            base, **kwargs, **DEVICE_ARGS
-        )
-    except (ValueError, ImportError):
-        # Architectures without flash-attn support (e.g. BERT) use the default attention
-        model = AutoModelForSequenceClassification.from_pretrained(
-            base, **kwargs, device_map="cuda" if torch.cuda.is_available() else None
-        )
+    model = load_pretrained(AutoModelForSequenceClassification, base, **kwargs)
     model.config.problem_type = "single_label_classification"
     return model
 

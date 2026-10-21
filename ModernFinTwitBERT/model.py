@@ -7,11 +7,11 @@ from data import load_finetuning_data, load_pretraining_data
 from dotenv import load_dotenv
 from sklearn.metrics import f1_score, precision_score
 from transformers import (
+    AutoModelForMaskedLM,
     AutoModelForSequenceClassification,
     AutoTokenizer,
     DataCollatorForLanguageModeling,
     DataCollatorWithPadding,
-    ModernBertForMaskedLM,
     Trainer,
     TrainingArguments,
 )
@@ -22,6 +22,15 @@ DEVICE_ARGS = (
     if torch.cuda.is_available()
     else {"attn_implementation": "sdpa"}
 )
+
+
+def load_pretrained(auto_class, name: str, **kwargs):
+    """Load with flash-attn where the architecture supports it, else the default attention."""
+    try:
+        return auto_class.from_pretrained(name, **kwargs, **DEVICE_ARGS)
+    except (ValueError, ImportError):
+        device_map = "cuda" if torch.cuda.is_available() else None
+        return auto_class.from_pretrained(name, **kwargs, device_map=device_map)
 
 
 def compute_metrics(eval_pred):
@@ -61,24 +70,26 @@ class ModernFinTwitBERT:
 
         # Load the model
         if self.mode == "pretrain":
-            self.model = ModernBertForMaskedLM.from_pretrained(
+            self.model = load_pretrained(
+                AutoModelForMaskedLM,
                 self.config[self.mode]["base_model"],
                 dtype=torch.float32,  # bf16 autocast comes from the bf16 training arg
                 cache_dir="models",
-                **DEVICE_ARGS,
             )
             # Load the tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.config[self.mode]["base_model"], cache_dir="models"
             )
 
-            # Add special tokens
-            special_tokens = ["@USER", "[URL]"]
-            self.tokenizer.add_tokens(special_tokens)
-            # Keep the vocab a multiple of 64 (as in ModernBERT) for faster matmuls
-            self.model.resize_token_embeddings(
-                len(self.tokenizer), pad_to_multiple_of=64
-            )
+            # New tokens for the @USER and [URL] placeholders start from random
+            # embeddings, so only add them when the base model has no good split for them
+            special_tokens = self.config[self.mode].get("add_tokens", [])
+            if special_tokens:
+                self.tokenizer.add_tokens(special_tokens)
+                # Keep the vocab a multiple of 64 for faster matmuls
+                self.model.resize_token_embeddings(
+                    len(self.tokenizer), pad_to_multiple_of=64
+                )
 
             # Load the data
             self.train, self.val = load_pretraining_data()
@@ -152,10 +163,10 @@ class ModernFinTwitBERT:
 
         # Use the MLM data collator when pretraining
         if self.mode == "pretrain":
-            # ModernBERT was pretrained with 30% masking
+            # Match the base model's own masking rate (RoBERTa 15%, ModernBERT 30%)
             data_collator = DataCollatorForLanguageModeling(
                 tokenizer=self.tokenizer,
-                mlm_probability=self.config[self.mode].get("mlm_probability", 0.3),
+                mlm_probability=self.config[self.mode].get("mlm_probability", 0.15),
             )
 
         # Compute F1 and accuracy scores when finetuning
@@ -230,14 +241,14 @@ class ModernFinTwitBERT:
         return
 
     def model_init(self, trial=None):
-        model = AutoModelForSequenceClassification.from_pretrained(
+        model = load_pretrained(
+            AutoModelForSequenceClassification,
             self.config[self.mode]["base_model"],
             num_labels=len(self.labels),
             id2label={k: v for k, v in enumerate(self.labels)},
             label2id={v: k for k, v in enumerate(self.labels)},
             dtype=torch.float32,  # bf16 autocast comes from the bf16 training arg
             cache_dir="models",
-            **DEVICE_ARGS,
         )
         model.config.problem_type = "single_label_classification"
         return model
