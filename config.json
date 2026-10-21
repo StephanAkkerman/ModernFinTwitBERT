@@ -28,7 +28,8 @@
             "dataloader_num_workers": 4,
             "metric_for_best_model": "eval_loss",
             "greater_is_better": false,
-            "gradient_accumulation_steps": 4
+            "gradient_accumulation_steps": 4,
+            "train_sampling_strategy": "group_by_length"
         },
         "mlm_probability": 0.15,
         "add_tokens": [],

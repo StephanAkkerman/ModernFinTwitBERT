@@ -71,6 +71,10 @@ print(f"Predicted sentiment: {predicted_class}")
 Training is configured in `config.json` and run from the repository root with `python ModernFinTwitBERT/model.py`. The base model is `cardiffnlp/twitter-roberta-large-2022-154m`, which scored best in the benchmark (macro F1 0.807 on the test set).
 
 1. **Domain pretraining:** set `"mode": "pretrain"`. This continues masked-language-model training on `StephanAkkerman/crypto-stock-tweets` (with the test tweets removed) and saves to `output/<pretrain model_name>`. One epoch takes a few hours on an A100.
+
+   - Start with `python ModernFinTwitBERT/model.py --max-steps 50`: a short trial run that saves nothing, to check speed and memory on a new GPU.
+   - The cleaned tweets are cached in `datasets/pretrain_clean`. Delete that folder after changing the cleaning or the test set.
+   - Checkpoints go to `output/checkpoints/<model_name>`. Running the same command again resumes from the last one.
 2. **Sentiment fine-tuning:** set `"mode": "finetune"` and point `finetune.base_model` at the pretraining output, e.g. `output/FinTwitRoBERTa-large`.
 
 To check whether pretraining helped, add the pretraining output to `benchmark.json` as a `"base"` entry with `"finetune_args": {"learning_rate": 2e-05}` and compare it with `twitter-roberta-large-2022`.

@@ -150,10 +150,27 @@ def load_pretraining_data(val_size: int = 10_000) -> tuple:
     return split["train"], split["test"]
 
 
+def pretrain_dedup_key(text: str) -> str:
+    """
+    `dedup_key` with numbers masked, so bot templates such as price and whale alerts
+    ("BTC is $27,104 (+1.2%)") collapse into one tweet.
+    """
+    return re.sub(r"\d+", "0", dedup_key(text))
+
+
+TAG = re.compile(r"^([#$]\S+|@USER|\[URL\])$")
+
+
+def tag_share(text: str) -> float:
+    """Share of words that are hashtags, cashtags, mentions or links."""
+    words = text.split()
+    return sum(bool(TAG.match(word)) for word in words) / max(1, len(words))
+
+
 def clean_pretraining_tweets(dataset: Dataset) -> Dataset:
     """
-    The same cleaning as `preprocess_dataset`, but in Arrow instead of pandas:
-    pandas needs more than 15 GB of RAM for the 8M pretraining tweets.
+    Like `preprocess_dataset`, but in Arrow instead of pandas (pandas needs more than
+    15 GB of RAM for the 8M pretraining tweets) and stricter about bot and tag spam.
     """
     dataset = dataset.filter(lambda x: x["text"] is not None, num_proc=os.cpu_count())
 
@@ -162,7 +179,7 @@ def clean_pretraining_tweets(dataset: Dataset) -> Dataset:
         # A stable hash of the near-duplicate key (Python's hash() differs per process)
         keys = [
             int.from_bytes(
-                hashlib.blake2b(dedup_key(text).encode(), digest_size=8).digest(),
+                hashlib.blake2b(pretrain_dedup_key(text).encode(), digest_size=8).digest(),
                 signed=True,
             )
             for text in texts
@@ -180,8 +197,11 @@ def clean_pretraining_tweets(dataset: Dataset) -> Dataset:
     _, first = np.unique(np.asarray(dataset["key"], dtype=np.int64), return_index=True)
     dataset = dataset.select(np.sort(first)).remove_columns("key")
 
-    # Drop 1 word tweets
-    return dataset.filter(lambda x: len(x["text"].split()) > 1, num_proc=os.cpu_count())
+    # Drop 1 word tweets and tweets that are mostly hashtags, cashtags, mentions and links
+    return dataset.filter(
+        lambda x: len(x["text"].split()) > 1 and tag_share(x["text"]) <= 0.5,
+        num_proc=os.cpu_count(),
+    )
 
 
 def load_finetuning_data(

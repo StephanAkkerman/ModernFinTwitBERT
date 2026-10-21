@@ -70,7 +70,8 @@ class ModernFinTwitBERT:
 
         # Checkpoints per model, so a crashed or interrupted run can resume
         self.mode_args.setdefault("output_dir", f"output/checkpoints/{self.model_name}")
-        if max_steps:
+        self.trial = bool(max_steps)
+        if self.trial:
             # Short trial run, e.g. to measure speed and memory on a new GPU
             self.mode_args["max_steps"] = max_steps
             self.mode_args["save_strategy"] = "no"
@@ -238,7 +239,7 @@ class ModernFinTwitBERT:
             )
 
         checkpoint = get_last_checkpoint(self.mode_args["output_dir"])
-        if checkpoint and not self.mode_args.get("max_steps"):
+        if checkpoint and not self.trial:
             print(f"Resuming from {checkpoint}")
         else:
             checkpoint = None
@@ -248,7 +249,7 @@ class ModernFinTwitBERT:
 
         print("Finished training")
 
-        if self.mode_args.get("max_steps"):
+        if self.trial:
             print("Trial run finished, not saving the model")
             return
 
