@@ -74,7 +74,7 @@ Training is configured in `config.json` and run from the repository root with `p
 
    - On a rented GPU, `scripts/pretrain_remote.sh` does all of this: it installs the requirements (without flash-attn, which RoBERTa does not use), runs a 50-step trial, then the full run, and uploads the model to a private Hugging Face repo if `HF_REPO` is set.
    - Start with `python ModernFinTwitBERT/model.py --max-steps 50`: a short trial run that saves nothing, to check speed and memory on a new GPU.
-   - The cleaned tweets are cached in `datasets/pretrain_clean`. Delete that folder after changing the cleaning or the test set.
+   - The pretraining batch (256) is sized for an 80 GB A100. On a 40 GB GPU, use 128 with `gradient_accumulation_steps` 2.\n   - The cleaned tweets are cached in `datasets/pretrain_clean`. Delete that folder after changing the cleaning or the test set.
    - Checkpoints go to `output/checkpoints/<model_name>`. Running the same command again resumes from the last one.
 2. **Sentiment fine-tuning:** set `"mode": "finetune"` and point `finetune.base_model` at the pretraining output, e.g. `output/FinTwitRoBERTa-large`.
 
