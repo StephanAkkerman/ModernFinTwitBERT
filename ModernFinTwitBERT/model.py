@@ -1,5 +1,7 @@
+import argparse
 import json
 import os
+from functools import partial
 
 import numpy as np
 import torch
@@ -15,6 +17,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.trainer_utils import get_last_checkpoint
 
 # flash-attn only works on GPU; fall back to PyTorch attention elsewhere
 DEVICE_ARGS = (
@@ -33,6 +36,11 @@ def load_pretrained(auto_class, name: str, **kwargs):
         return auto_class.from_pretrained(name, **kwargs, device_map=device_map)
 
 
+def encode(batch, tokenizer, max_length):
+    # Tweets are short: truncate at max_length and pad per batch in the collator
+    return tokenizer(batch["text"], truncation=True, max_length=max_length)
+
+
 def compute_metrics(eval_pred):
     """Macro F1 as the headline (the data is bullish-heavy), plus bullish/bearish precision."""
     predictions, labels = eval_pred
@@ -48,13 +56,13 @@ def compute_metrics(eval_pred):
 
 
 class ModernFinTwitBERT:
-    def __init__(self):
+    def __init__(self, max_steps: int | None = None, mode: str | None = None):
         # Read model args from config.json
         with open("config.json", "r") as config_file:
             self.config = json.load(config_file)
 
         # Set the mode (finetune or pretrain)
-        self.mode = self.config["mode"]
+        self.mode = mode or self.config["mode"]
 
         self.hyperopt = self.config[self.mode]["do_hyperopt"]
 
@@ -65,6 +73,15 @@ class ModernFinTwitBERT:
         }
 
         self.model_name = self.config[self.mode]["model_name"]
+
+        # Checkpoints per model, so a crashed or interrupted run can resume
+        self.mode_args.setdefault("output_dir", f"output/checkpoints/{self.model_name}")
+        self.trial = bool(max_steps)
+        if self.trial:
+            # Short trial run, e.g. to measure speed and memory on a new GPU
+            self.mode_args["max_steps"] = max_steps
+            self.mode_args["save_strategy"] = "no"
+            self.mode_args["load_best_model_at_end"] = False
 
         self.labels = ["NEUTRAL", "BULLISH", "BEARISH"]
 
@@ -118,6 +135,14 @@ class ModernFinTwitBERT:
         # Check if a .env file exists
         if not os.path.exists("wandb.env"):
             print("No wandb.env file found")
+            # Without a key wandb stops the run, so a fresh GPU box would fail at step 0
+            netrc = os.path.expanduser("~/.netrc")
+            logged_in = "WANDB_API_KEY" in os.environ or (
+                os.path.exists(netrc) and "api.wandb.ai" in open(netrc).read()
+            )
+            if not logged_in and self.mode_args.get("report_to") == "wandb":
+                print("Not logged in to wandb, so not logging the run there")
+                self.mode_args["report_to"] = "none"
             return
 
         # Load the .env file
@@ -135,26 +160,24 @@ class ModernFinTwitBERT:
         # turn off watch to log faster
         os.environ["WANDB_WATCH"] = "false"
 
-    def encode(self, batch):
-        # Tweets are short: truncate at max_length and pad per batch in the collator
-        return self.tokenizer(
-            batch["text"], truncation=True, max_length=self.max_length
-        )
-
     def trainer(self):
         data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
 
-        # Encode the data
+        # Encode the data. A plain function, not a method: datasets pickles it for every
+        # worker, and pickling `self` would copy the whole model into each of them
+        encode_batch = partial(
+            encode, tokenizer=self.tokenizer, max_length=self.max_length
+        )
         # changing batch_size does not seem to change the speed
         train = self.train.map(
-            self.encode,
+            encode_batch,
             batched=True,
             remove_columns=["text"],
             batch_size=5_000,
             num_proc=os.cpu_count(),
         )
         val = self.val.map(
-            self.encode,
+            encode_batch,
             batched=True,
             remove_columns=["text"],
             batch_size=5_000,
@@ -227,11 +250,25 @@ class ModernFinTwitBERT:
                 compute_metrics=compute_metrics_fn,
             )
 
-        print("Starting training")
+        # RoBERTa accepts **kwargs, so Trainer assumes it normalizes the loss over the
+        # accumulated batches itself; it does not, which multiplied the loss and the
+        # gradients by gradient_accumulation_steps. This makes Trainer average them.
+        trainer.model_accepts_loss_kwargs = False
 
-        trainer.train()
+        checkpoint = get_last_checkpoint(self.mode_args["output_dir"])
+        if checkpoint and not self.trial:
+            print(f"Resuming from {checkpoint}")
+        else:
+            checkpoint = None
+            print("Starting training")
+
+        trainer.train(resume_from_checkpoint=checkpoint)
 
         print("Finished training")
+
+        if self.trial:
+            print("Trial run finished, not saving the model")
+            return
 
         # Save the model
         trainer.save_model(self.output_dir)
@@ -271,4 +308,14 @@ def optuna_hp_space(trial):
 
 
 if __name__ == "__main__":
-    ModernFinTwitBERT().trainer()
+    parser = argparse.ArgumentParser(description="Pretrain or fine-tune, see config.json")
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        help="Stop after this many steps without saving, to test speed and memory",
+    )
+    parser.add_argument(
+        "--mode", choices=["pretrain", "finetune"], help="Overrides mode in config.json"
+    )
+    args = parser.parse_args()
+    ModernFinTwitBERT(args.max_steps, args.mode).trainer()
