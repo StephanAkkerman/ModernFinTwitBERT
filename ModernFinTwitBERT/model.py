@@ -109,7 +109,9 @@ class ModernFinTwitBERT:
                 )
 
             # Load the data
-            self.train, self.val = load_pretraining_data()
+            self.train, self.val = load_pretraining_data(
+                self.config[self.mode].get("datasets")
+            )
 
         elif self.mode == "finetune":
             # Need to update for our own pretrained model

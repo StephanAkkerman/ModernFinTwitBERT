@@ -19,8 +19,12 @@ from datasets import ClassLabel, Dataset, concatenate_datasets, load_dataset
 TEST_SET_PATH = Path(__file__).parent.parent / "data" / "test" / "test_v0.csv"
 LABELS = ["neutral", "bullish", "bearish"]
 
-# Cleaned pretraining tweets; delete it after changing the cleaning or the test set
+# Cleaned pretraining tweets, one folder per list of sources; delete it after changing
+# the cleaning or the test set
 PRETRAIN_CACHE = Path("datasets") / "pretrain_clean"
+
+# Used when config.json has no pretrain "datasets"
+DEFAULT_PRETRAIN_DATASETS = [{"name": "StephanAkkerman/crypto-stock-tweets"}]
 
 # The directional tweets of the moritz, pooja, fiqa, zeroshot and ieee sources, relabeled
 # by hand to the same guideline as the test set (columns: tweet, label). Most become neutral.
@@ -111,12 +115,37 @@ def split_dataset(
     return split_ds["train"], split_temp["train"], split_temp["test"]
 
 
-def load_pretraining_data(val_size: int = 10_000) -> tuple:
+def load_pretraining_source(source: dict) -> Dataset:
+    """One pretraining source as a dataset with a single "text" column."""
+    name = source["name"]
+    suffix = Path(name).suffix.lstrip(".")
+    if suffix in ("csv", "json", "jsonl", "parquet"):
+        # A local file, e.g. a fresh scrape
+        builder = "json" if suffix == "jsonl" else suffix
+        dataset = load_dataset(builder, data_files=name, split="train")
+    else:
+        dataset = load_dataset(name, split="train", cache_dir="datasets")
+    text_column = source.get("text_column", "text")
+    if text_column != "text":
+        dataset = dataset.rename_column(text_column, "text")
+    return dataset.select_columns("text")
+
+
+def load_pretraining_data(
+    sources: list[dict] | None = None, val_size: int = 10_000
+) -> tuple:
     """
     Loads the pretraining tweets, without the tweets of the frozen test set.
 
     Parameters
     ----------
+    sources : list[dict], optional
+        Datasets to pretrain on, each {"name": Hugging Face id or local .csv/.jsonl/
+        .parquet file, "text_column": default "text", "repeat": default 1}.
+        Near-duplicates across sources are kept once, in the earliest source listed, so
+        put curated sources first. "repeat" upweights a source by showing its training
+        tweets that many times (with new masks each time); validation is not repeated.
+        By default only StephanAkkerman/crypto-stock-tweets.
     val_size : int, optional
         Number of tweets held out to track the MLM loss, by default 10,000.
         A small fixed set is enough; everything else is used for training.
@@ -126,28 +155,50 @@ def load_pretraining_data(val_size: int = 10_000) -> tuple:
     tuple
         The training and validation datasets (validation is None if val_size is 0).
     """
+    sources = sources or DEFAULT_PRETRAIN_DATASETS
+    names = [source["name"] for source in sources]
+
     # Cleaning 8M tweets takes a while, so reuse the result on a rerun or resume
-    if PRETRAIN_CACHE.exists():
-        dataset = Dataset.load_from_disk(str(PRETRAIN_CACHE))
+    cache = PRETRAIN_CACHE / hashlib.blake2b(
+        "\n".join(names).encode(), digest_size=4
+    ).hexdigest()
+    if cache.exists():
+        dataset = Dataset.load_from_disk(str(cache))
     else:
-        dataset = load_dataset(
-            "StephanAkkerman/crypto-stock-tweets",
-            split="train",
-            cache_dir="datasets",
+        parts = [load_pretraining_source(source) for source in sources]
+        dataset = concatenate_datasets(
+            [part.add_column("source", [i] * len(part)) for i, part in enumerate(parts)]
         )
 
         # The test tweets come from the same feed export, so keep them out of MLM
         test_keys = test_set_keys()
         dataset = dataset.filter(
-            lambda x: dedup_key(x["text"]) not in test_keys, num_proc=os.cpu_count()
+            lambda x: x["text"] is not None and dedup_key(x["text"]) not in test_keys,
+            num_proc=os.cpu_count(),
         )
 
         dataset = clean_pretraining_tweets(dataset)
-        dataset.save_to_disk(str(PRETRAIN_CACHE))
-    if not val_size:
-        return dataset, None
-    split = dataset.train_test_split(test_size=val_size, seed=42)
-    return split["train"], split["test"]
+        dataset.save_to_disk(str(cache))
+
+    counts = np.bincount(dataset["source"], minlength=len(sources))
+    for source, count in zip(sources, counts):
+        print(f"{source['name']}: {count:,} tweets after cleaning")
+
+    if val_size:
+        split = dataset.train_test_split(test_size=val_size, seed=42)
+        train, val = split["train"], split["test"].remove_columns("source")
+    else:
+        train, val = dataset, None
+
+    # Upweight sources by repeating their training tweets
+    sources_column = np.asarray(train["source"])
+    extra = [
+        train.select(np.flatnonzero(sources_column == i))
+        for i, source in enumerate(sources)
+        for _ in range(source.get("repeat", 1) - 1)
+    ]
+    train = concatenate_datasets([train, *extra]).remove_columns("source")
+    return train, val
 
 
 def pretrain_dedup_key(text: str) -> str:
@@ -184,7 +235,7 @@ def clean_pretraining_tweets(dataset: Dataset) -> Dataset:
             )
             for text in texts
         ]
-        return {"text": texts, "key": keys}
+        return {"text": texts, "key": keys, "source": batch["source"]}
 
     dataset = dataset.map(
         clean,

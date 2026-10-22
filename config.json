@@ -11,6 +11,10 @@
     "pretrain": {
         "model_name": "FinTwitRoBERTa-large",
         "base_model": "cardiffnlp/twitter-roberta-large-2022-154m",
+        "datasets": [
+            {"name": "StephanAkkerman/financial-tweets", "text_column": "description", "repeat": 3},
+            {"name": "StephanAkkerman/crypto-stock-tweets"}
+        ],
         "do_hyperopt": false,
         "pretrain_args": {
             "num_train_epochs": 1,
