@@ -76,7 +76,7 @@ Training is configured in `config.json` and run from the repository root with `p
    - Start with `python ModernFinTwitBERT/model.py --max-steps 50`: a short trial run that saves nothing, to check speed and memory on a new GPU.
    - The pretraining batch (256) is sized for an 80 GB A100. On a 40 GB GPU, use 128 with `gradient_accumulation_steps` 2.
    - `pretrain.datasets` in `config.json` lists the sources: Hugging Face ids or local `.csv`/`.jsonl`/`.parquet` files, each with an optional `text_column` and `repeat` to upweight it. Put curated sources first: near-duplicates are kept in the first source listed.
-   - The cleaned tweets are cached in `datasets/pretrain_clean`. Delete that folder after changing the cleaning or the test set.
+   - The cleaned tweets are cached in `datasets/pretrain_clean`, and cleaned again automatically when a source dataset, the cleaning code or the test set changes.
    - Checkpoints go to `output/checkpoints/<model_name>`. Running the same command again resumes from the last one.
 2. **Sentiment fine-tuning:** set `"mode": "finetune"` and point `finetune.base_model` at the pretraining output, e.g. `output/FinTwitRoBERTa-large`.
 

@@ -19,8 +19,12 @@ from datasets import ClassLabel, Dataset, concatenate_datasets, load_dataset
 TEST_SET_PATH = Path(__file__).parent.parent / "data" / "test" / "test_v0.csv"
 LABELS = ["neutral", "bullish", "bearish"]
 
-# Cleaned pretraining tweets, one folder per list of sources; delete it after changing
-# the cleaning or the test set
+# Tweet ids of all 1,500 test candidates (test_v0 plus the tweets dropped as unsure), to
+# keep them out of pretraining even when their text was reformatted
+HELDOUT_IDS_PATH = TEST_SET_PATH.parent / "heldout_ids_v0.txt"
+
+# Cleaned pretraining tweets, one folder per version of the sources, this file and the
+# test set, so changing any of them cleans again
 PRETRAIN_CACHE = Path("datasets") / "pretrain_clean"
 
 # Used when config.json has no pretrain "datasets"
@@ -60,6 +64,10 @@ def preprocess_tweet(tweet: str) -> str:
     """
     # Unescape HTML characters
     tweet = html.unescape(tweet)
+
+    # Discord embeds write quote tweets as "> [@user](https://twitter.com/user):" lines
+    tweet = re.sub(r"\[([^\]]*)\]\(https?://[^)\s]*\)", r"\1", tweet)
+    tweet = re.sub(r"^> ?", "", tweet, flags=re.MULTILINE)
 
     # Replace URLs wiht URL token
     tweet = re.sub(r"http\S+", "[URL]", tweet)
@@ -116,7 +124,10 @@ def split_dataset(
 
 
 def load_pretraining_source(source: dict) -> Dataset:
-    """One pretraining source as a dataset with a single "text" column."""
+    """
+    One pretraining source with a "text" column and a "heldout" column that marks the
+    test candidates, found by id where the source has tweet ids or tweet urls.
+    """
     name = source["name"]
     suffix = Path(name).suffix.lstrip(".")
     if suffix in ("csv", "json", "jsonl", "parquet"):
@@ -125,10 +136,18 @@ def load_pretraining_source(source: dict) -> Dataset:
         dataset = load_dataset(builder, data_files=name, split="train")
     else:
         dataset = load_dataset(name, split="train", cache_dir="datasets")
+    heldout_ids = set(HELDOUT_IDS_PATH.read_text().split())
+    id_column = next((c for c in ("tweet_id", "url") if c in dataset.column_names), None)
+    status = re.compile(r"(\d+)$" if id_column == "tweet_id" else r"status/(\d+)")
+
+    def mark(x):
+        match = status.search(str(x[id_column] or "")) if id_column else None
+        return {"heldout": bool(match) and match.group(1) in heldout_ids}
+
     text_column = source.get("text_column", "text")
     if text_column != "text":
         dataset = dataset.rename_column(text_column, "text")
-    return dataset.select_columns("text")
+    return dataset.map(mark, num_proc=os.cpu_count()).select_columns(["text", "heldout"])
 
 
 def load_pretraining_data(
@@ -156,26 +175,33 @@ def load_pretraining_data(
         The training and validation datasets (validation is None if val_size is 0).
     """
     sources = sources or DEFAULT_PRETRAIN_DATASETS
-    names = [source["name"] for source in sources]
 
     # Cleaning 8M tweets takes a while, so reuse the result on a rerun or resume
-    cache = PRETRAIN_CACHE / hashlib.blake2b(
-        "\n".join(names).encode(), digest_size=4
-    ).hexdigest()
+    parts = [load_pretraining_source(source) for source in sources]
+    version = hashlib.blake2b(digest_size=4)
+    for part in parts:
+        version.update(part._fingerprint.encode())
+    for path in (Path(__file__), TEST_SET_PATH, HELDOUT_IDS_PATH):
+        version.update(path.read_bytes())
+    cache = PRETRAIN_CACHE / version.hexdigest()
+
     if cache.exists():
         dataset = Dataset.load_from_disk(str(cache))
     else:
-        parts = [load_pretraining_source(source) for source in sources]
         dataset = concatenate_datasets(
             [part.add_column("source", [i] * len(part)) for i, part in enumerate(parts)]
         )
 
-        # The test tweets come from the same feed export, so keep them out of MLM
-        test_keys = test_set_keys()
+        # The test tweets come from the same feed export, so keep them out of MLM: by id,
+        # and by text for copies in sources without ids
+        heldout = dataset.filter(lambda x: x["heldout"])
+        test_keys = test_set_keys() | {dedup_key(t) for t in heldout["text"] if t}
         dataset = dataset.filter(
-            lambda x: x["text"] is not None and dedup_key(x["text"]) not in test_keys,
+            lambda x: not x["heldout"]
+            and x["text"] is not None
+            and dedup_key(x["text"]) not in test_keys,
             num_proc=os.cpu_count(),
-        )
+        ).remove_columns("heldout")
 
         dataset = clean_pretraining_tweets(dataset)
         dataset.save_to_disk(str(cache))
