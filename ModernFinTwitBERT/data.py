@@ -19,8 +19,16 @@ from datasets import ClassLabel, Dataset, concatenate_datasets, load_dataset
 TEST_SET_PATH = Path(__file__).parent.parent / "data" / "test" / "test_v0.csv"
 LABELS = ["neutral", "bullish", "bearish"]
 
-# Cleaned pretraining tweets; delete it after changing the cleaning or the test set
+# Tweet ids of all 1,500 test candidates (test_v0 plus the tweets dropped as unsure), to
+# keep them out of pretraining even when their text was reformatted
+HELDOUT_IDS_PATH = TEST_SET_PATH.parent / "heldout_ids_v0.txt"
+
+# Cleaned pretraining tweets, one folder per version of the sources, this file and the
+# test set, so changing any of them cleans again
 PRETRAIN_CACHE = Path("datasets") / "pretrain_clean"
+
+# Used when config.json has no pretrain "datasets"
+DEFAULT_PRETRAIN_DATASETS = [{"name": "StephanAkkerman/crypto-stock-tweets"}]
 
 # The directional tweets of the moritz, pooja, fiqa, zeroshot and ieee sources, relabeled
 # by hand to the same guideline as the test set (columns: tweet, label). Most become neutral.
@@ -40,6 +48,21 @@ SOURCES = {
 }
 
 
+# Discord embeds add the quoted (or replied-to) tweet below the tweet itself, as
+# "> [@user](https://twitter.com/user):" followed by "> " lines
+QUOTE = re.compile(r"^> \[@[^\]]*\]\(https?://[^)\s]*\):\n?((?:^>.*(?:\n|$))*)", re.MULTILINE)
+
+
+def split_quote(tweet: str) -> list[str]:
+    """The tweet's own text and, if it quotes one, the quoted tweet's text."""
+    match = QUOTE.search(tweet)
+    if not match:
+        return [tweet]
+    own = tweet[: match.start()].strip()
+    quoted = re.sub(r"^> ?", "", match.group(1), flags=re.MULTILINE).strip()
+    return [part for part in (own, quoted) if part]
+
+
 def preprocess_tweet(tweet: str) -> str:
     """
     Preprocess a tweet by replacing URLs, @mentions, and cash tags with tokens.
@@ -56,6 +79,11 @@ def preprocess_tweet(tweet: str) -> str:
     """
     # Unescape HTML characters
     tweet = html.unescape(tweet)
+
+    # Only the tweet's own words carry its sentiment; quoted tweets are scored on their own
+    tweet = split_quote(tweet)[0]
+    # Markdown links from Discord embeds
+    tweet = re.sub(r"\[([^\]]*)\]\(https?://[^)\s]*\)", r"\1", tweet)
 
     # Replace URLs wiht URL token
     tweet = re.sub(r"http\S+", "[URL]", tweet)
@@ -111,12 +139,48 @@ def split_dataset(
     return split_ds["train"], split_temp["train"], split_temp["test"]
 
 
-def load_pretraining_data(val_size: int = 10_000) -> tuple:
+def load_pretraining_source(source: dict) -> Dataset:
+    """
+    One pretraining source with a "text" column and a "heldout" column that marks the
+    test candidates, found by id where the source has tweet ids or tweet urls.
+    """
+    name = source["name"]
+    suffix = Path(name).suffix.lstrip(".")
+    if suffix in ("csv", "json", "jsonl", "parquet"):
+        # A local file, e.g. a fresh scrape
+        builder = "json" if suffix == "jsonl" else suffix
+        dataset = load_dataset(builder, data_files=name, split="train")
+    else:
+        dataset = load_dataset(name, split="train", cache_dir="datasets")
+    heldout_ids = set(HELDOUT_IDS_PATH.read_text().split())
+    id_column = next((c for c in ("tweet_id", "url") if c in dataset.column_names), None)
+    status = re.compile(r"(\d+)$" if id_column == "tweet_id" else r"status/(\d+)")
+
+    def mark(x):
+        match = status.search(str(x[id_column] or "")) if id_column else None
+        return {"heldout": bool(match) and match.group(1) in heldout_ids}
+
+    text_column = source.get("text_column", "text")
+    if text_column != "text":
+        dataset = dataset.rename_column(text_column, "text")
+    return dataset.map(mark, num_proc=os.cpu_count()).select_columns(["text", "heldout"])
+
+
+def load_pretraining_data(
+    sources: list[dict] | None = None, val_size: int = 10_000
+) -> tuple:
     """
     Loads the pretraining tweets, without the tweets of the frozen test set.
 
     Parameters
     ----------
+    sources : list[dict], optional
+        Datasets to pretrain on, each {"name": Hugging Face id or local .csv/.jsonl/
+        .parquet file, "text_column": default "text", "repeat": default 1}.
+        Near-duplicates across sources are kept once, in the earliest source listed, so
+        put curated sources first. "repeat" upweights a source by showing its training
+        tweets that many times (with new masks each time); validation is not repeated.
+        By default only StephanAkkerman/crypto-stock-tweets.
     val_size : int, optional
         Number of tweets held out to track the MLM loss, by default 10,000.
         A small fixed set is enough; everything else is used for training.
@@ -126,28 +190,71 @@ def load_pretraining_data(val_size: int = 10_000) -> tuple:
     tuple
         The training and validation datasets (validation is None if val_size is 0).
     """
+    sources = sources or DEFAULT_PRETRAIN_DATASETS
+
     # Cleaning 8M tweets takes a while, so reuse the result on a rerun or resume
-    if PRETRAIN_CACHE.exists():
-        dataset = Dataset.load_from_disk(str(PRETRAIN_CACHE))
+    parts = [load_pretraining_source(source) for source in sources]
+    version = hashlib.blake2b(digest_size=4)
+    for part in parts:
+        version.update(part._fingerprint.encode())
+    for path in (Path(__file__), TEST_SET_PATH, HELDOUT_IDS_PATH):
+        version.update(path.read_bytes())
+    cache = PRETRAIN_CACHE / version.hexdigest()
+
+    if cache.exists():
+        dataset = Dataset.load_from_disk(str(cache))
     else:
-        dataset = load_dataset(
-            "StephanAkkerman/crypto-stock-tweets",
-            split="train",
-            cache_dir="datasets",
+        dataset = concatenate_datasets(
+            [part.add_column("source", [i] * len(part)) for i, part in enumerate(parts)]
         )
 
-        # The test tweets come from the same feed export, so keep them out of MLM
-        test_keys = test_set_keys()
+        # A quoted tweet becomes a pretraining tweet of its own (dedup drops it if the
+        # data has it already), so each example is one author's words
+        def split(batch):
+            rows = [
+                (part, source, heldout)
+                for text, source, heldout in zip(
+                    batch["text"], batch["source"], batch["heldout"]
+                )
+                for part in (split_quote(text) if text else [text])
+            ]
+            return dict(zip(["text", "source", "heldout"], map(list, zip(*rows))))
+
+        dataset = dataset.map(split, batched=True, num_proc=os.cpu_count())
+
+        # The test tweets come from the same feed export, so keep them out of MLM: by id,
+        # and by text for copies in sources without ids
+        heldout = dataset.filter(lambda x: x["heldout"])
+        test_keys = test_set_keys() | {dedup_key(t) for t in heldout["text"] if t}
         dataset = dataset.filter(
-            lambda x: dedup_key(x["text"]) not in test_keys, num_proc=os.cpu_count()
-        )
+            lambda x: not x["heldout"]
+            and x["text"] is not None
+            and dedup_key(x["text"]) not in test_keys,
+            num_proc=os.cpu_count(),
+        ).remove_columns("heldout")
 
         dataset = clean_pretraining_tweets(dataset)
-        dataset.save_to_disk(str(PRETRAIN_CACHE))
-    if not val_size:
-        return dataset, None
-    split = dataset.train_test_split(test_size=val_size, seed=42)
-    return split["train"], split["test"]
+        dataset.save_to_disk(str(cache))
+
+    counts = np.bincount(dataset["source"], minlength=len(sources))
+    for source, count in zip(sources, counts):
+        print(f"{source['name']}: {count:,} tweets after cleaning")
+
+    if val_size:
+        split = dataset.train_test_split(test_size=val_size, seed=42)
+        train, val = split["train"], split["test"].remove_columns("source")
+    else:
+        train, val = dataset, None
+
+    # Upweight sources by repeating their training tweets
+    sources_column = np.asarray(train["source"])
+    extra = [
+        train.select(np.flatnonzero(sources_column == i))
+        for i, source in enumerate(sources)
+        for _ in range(source.get("repeat", 1) - 1)
+    ]
+    train = concatenate_datasets([train, *extra]).remove_columns("source")
+    return train, val
 
 
 def pretrain_dedup_key(text: str) -> str:
@@ -184,7 +291,7 @@ def clean_pretraining_tweets(dataset: Dataset) -> Dataset:
             )
             for text in texts
         ]
-        return {"text": texts, "key": keys}
+        return {"text": texts, "key": keys, "source": batch["source"]}
 
     dataset = dataset.map(
         clean,

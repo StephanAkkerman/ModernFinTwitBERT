@@ -7,7 +7,8 @@
 #
 # Running it again resumes from the last checkpoint. With HF_REPO set (and logged in with
 # `hf auth login` or HF_TOKEN), the model is uploaded as a private repo when done, so
-# nothing is lost when the rental ends.
+# nothing is lost when the rental ends. On RunPod the pod then stops itself, so billing
+# stops too (set STOP_POD=0 to keep it running). Clone into /workspace: it survives a stop.
 set -euo pipefail
 
 HF_REPO=${HF_REPO:-}
@@ -35,4 +36,9 @@ python ModernFinTwitBERT/model.py --mode pretrain
 if [ -n "$HF_REPO" ]; then
     MODEL_DIR=output/$(python -c "import json; print(json.load(open('config.json'))['pretrain']['model_name'])")
     hf upload "$HF_REPO" "$MODEL_DIR" . --private
+
+    # The model is safe on the hub now. Stopping keeps /workspace but ends GPU billing.
+    if [ "${STOP_POD:-1}" = 1 ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
+        runpodctl stop pod "$RUNPOD_POD_ID" || echo "Could not stop the pod, stop it in the RunPod console"
+    fi
 fi
