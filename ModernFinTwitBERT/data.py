@@ -48,6 +48,21 @@ SOURCES = {
 }
 
 
+# Discord embeds add the quoted (or replied-to) tweet below the tweet itself, as
+# "> [@user](https://twitter.com/user):" followed by "> " lines
+QUOTE = re.compile(r"^> \[@[^\]]*\]\(https?://[^)\s]*\):\n?((?:^>.*(?:\n|$))*)", re.MULTILINE)
+
+
+def split_quote(tweet: str) -> list[str]:
+    """The tweet's own text and, if it quotes one, the quoted tweet's text."""
+    match = QUOTE.search(tweet)
+    if not match:
+        return [tweet]
+    own = tweet[: match.start()].strip()
+    quoted = re.sub(r"^> ?", "", match.group(1), flags=re.MULTILINE).strip()
+    return [part for part in (own, quoted) if part]
+
+
 def preprocess_tweet(tweet: str) -> str:
     """
     Preprocess a tweet by replacing URLs, @mentions, and cash tags with tokens.
@@ -65,9 +80,10 @@ def preprocess_tweet(tweet: str) -> str:
     # Unescape HTML characters
     tweet = html.unescape(tweet)
 
-    # Discord embeds write quote tweets as "> [@user](https://twitter.com/user):" lines
+    # Only the tweet's own words carry its sentiment; quoted tweets are scored on their own
+    tweet = split_quote(tweet)[0]
+    # Markdown links from Discord embeds
     tweet = re.sub(r"\[([^\]]*)\]\(https?://[^)\s]*\)", r"\1", tweet)
-    tweet = re.sub(r"^> ?", "", tweet, flags=re.MULTILINE)
 
     # Replace URLs wiht URL token
     tweet = re.sub(r"http\S+", "[URL]", tweet)
@@ -191,6 +207,20 @@ def load_pretraining_data(
         dataset = concatenate_datasets(
             [part.add_column("source", [i] * len(part)) for i, part in enumerate(parts)]
         )
+
+        # A quoted tweet becomes a pretraining tweet of its own (dedup drops it if the
+        # data has it already), so each example is one author's words
+        def split(batch):
+            rows = [
+                (part, source, heldout)
+                for text, source, heldout in zip(
+                    batch["text"], batch["source"], batch["heldout"]
+                )
+                for part in (split_quote(text) if text else [text])
+            ]
+            return dict(zip(["text", "source", "heldout"], map(list, zip(*rows))))
+
+        dataset = dataset.map(split, batched=True, num_proc=os.cpu_count())
 
         # The test tweets come from the same feed export, so keep them out of MLM: by id,
         # and by text for copies in sources without ids
