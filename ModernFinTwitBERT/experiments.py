@@ -317,7 +317,7 @@ print({{model.config.id2label[i]: p for i, p in enumerate(probs[0].tolist())}})
 
 ## Scores
 
-dev = 646 tweets from a real feed (2024+), used to choose the recipe and fit the temperature;
+dev = 749 tweets from a real feed (2024+), used to choose the recipe and fit the temperature;
 test = 1,237 held-out tweets from the same feed. `test/ece_calibrated` uses the temperature.
 
 | metric | value |
