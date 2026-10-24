@@ -61,12 +61,14 @@ QUOTE = re.compile(r"^> \[@[^\]]*\]\(https?://[^)\s]*\):\n?((?:^>.*(?:\n|$))*)",
 
 def split_quote(tweet: str) -> list[str]:
     """The tweet's own text and, if it quotes one, the quoted tweet's text."""
+    # Some exports use \r\n, which QUOTE would not see past the "):" header
+    tweet = tweet.replace("\r\n", "\n")
     match = QUOTE.search(tweet)
     if not match:
         return [tweet]
     own = tweet[: match.start()].strip()
     quoted = re.sub(r"^> ?", "", match.group(1), flags=re.MULTILINE).strip()
-    return [part for part in (own, quoted) if part]
+    return [part for part in (own, quoted) if part] or [own]
 
 
 def preprocess_tweet(tweet: str) -> str:
