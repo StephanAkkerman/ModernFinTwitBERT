@@ -7,6 +7,13 @@
     "finetune_args": {},
     "models": [
         {
+            "name": "FinTwitRoBERTa-large",
+            "base": "StephanAkkerman/FinTwitRoBERTa-large",
+            "finetune_args": {
+                "learning_rate": 2e-05
+            }
+        },
+        {
             "name": "modernbert-base",
             "base": "answerdotai/ModernBERT-base"
         },
