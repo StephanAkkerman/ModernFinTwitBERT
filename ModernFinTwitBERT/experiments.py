@@ -24,6 +24,14 @@ Runs already in the results file are skipped. Run from the repository root:
     wandb login   # once
     python ModernFinTwitBERT/experiments.py
     python ModernFinTwitBERT/experiments.py --only baseline llrd-0.9
+
+To keep the final model, train it again with --save: the best checkpoint is saved to
+output/experiments/models/<name>-seed<seed> with the dev-fitted temperature in its config
+(`calibration_temperature`) and a model card. --hub-repo also uploads it to Hugging Face
+(private unless --public; log in first with `hf auth login`):
+
+    python ModernFinTwitBERT/experiments.py --only llrd-0.9 --seeds 42 --save \
+        --hub-repo StephanAkkerman/FinTwitRoBERTa-sentiment
 """
 
 import argparse
@@ -38,6 +46,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
+from huggingface_hub import HfApi
 from benchmark import load_base_model
 from eval import score
 from model import compute_metrics
@@ -166,7 +175,15 @@ def test_metrics(probs: np.ndarray, test: pd.DataFrame, prefix: str = "test") ->
 
 
 def run(
-    experiment: dict, seed: int, base: str, data: tuple, dev, test, config: dict, out: Path
+    experiment: dict,
+    seed: int,
+    base: str,
+    data: tuple,
+    dev,
+    test,
+    config: dict,
+    out: Path,
+    save_dir: Path | None = None,
 ):
     tokenizer = AutoTokenizer.from_pretrained(base, cache_dir="models")
     max_length = config["finetune"].get("max_length", 128)
@@ -245,8 +262,75 @@ def run(
         wandb.finish()
 
     np.save(OUTPUT_DIR / "predictions" / f"{experiment['name']}-seed{seed}.npy", calibrated)
+    if save_dir:
+        # Not `temperature`: transformers reserves that name for generation
+        trainer.model.config.calibration_temperature = temperature
+        trainer.save_model(str(save_dir))
+        tokenizer.save_pretrained(save_dir)
+        (save_dir / "README.md").write_text(model_card(experiment, seed, base, row))
+        print(f"Saved model to {save_dir}")
     shutil.rmtree(out, ignore_errors=True)
     return row
+
+
+def model_card(experiment: dict, seed: int, base: str, row: dict) -> str:
+    """A Hugging Face README with the recipe, scores and how to use the temperature."""
+    scores = "\n".join(
+        f"| {metric} | {row[metric]:.3f} |" for metric in SUMMARY_COLUMNS if metric in row
+    )
+    recipe = json.dumps({**experiment, "seed": seed}, indent=2)
+    return f"""---
+base_model: {base}
+library_name: transformers
+pipeline_tag: text-classification
+language: en
+tags:
+- finance
+- twitter
+- sentiment
+---
+
+# FinTwitRoBERTa sentiment
+
+Classifies financial tweets as NEUTRAL, BULLISH or BEARISH. Fine-tuned from
+[{base}](https://huggingface.co/{base}) with ModernFinTwitBERT's `experiments.py`.
+
+## Usage
+
+Divide the logits by `config.calibration_temperature` (fitted on the dev set) before the
+softmax to get calibrated confidence scores:
+
+```python
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+repo = "<this repo>"
+tokenizer = AutoTokenizer.from_pretrained(repo)
+model = AutoModelForSequenceClassification.from_pretrained(repo).eval()
+
+inputs = tokenizer(["$NVDA breaking out, loading calls"], return_tensors="pt", truncation=True)
+with torch.no_grad():
+    logits = model(**inputs).logits
+probs = (logits / model.config.calibration_temperature).softmax(-1)
+print({{model.config.id2label[i]: p for i, p in enumerate(probs[0].tolist())}})
+```
+
+## Scores
+
+dev = 646 tweets from a real feed (2024+), used to choose the recipe and fit the temperature;
+test = 1,237 held-out tweets from the same feed. `test/ece_calibrated` uses the temperature.
+
+| metric | value |
+| --- | --- |
+{scores}
+| temperature | {row["temperature"]:.3f} |
+
+## Recipe
+
+```json
+{recipe}
+```
+"""
 
 
 def labeled(dataset) -> pd.DataFrame:
@@ -287,6 +371,16 @@ def summarize(results: pd.DataFrame, test_df: pd.DataFrame) -> str:
     return "\n".join(f"| {line} |" for line in lines)
 
 
+def upload(folder: Path, repo: str, private: bool):
+    """Upload a saved model; the repo is created if needed (an existing one keeps its visibility)."""
+    readme = folder / "README.md"
+    readme.write_text(readme.read_text().replace("<this repo>", repo))
+    api = HfApi()
+    api.create_repo(repo, private=private, exist_ok=True)
+    api.upload_folder(folder_path=str(folder), repo_id=repo, commit_message="Upload model")
+    print(f"Uploaded {folder} to https://huggingface.co/{repo}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run fine-tuning experiments")
     parser.add_argument("--config", default="experiments.json")
@@ -294,7 +388,19 @@ def main():
     parser.add_argument(
         "--rerun", action="store_true", help="Drop earlier results of the selected experiments"
     )
+    parser.add_argument("--seeds", nargs="+", type=int, help="Override the seeds in the config")
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Keep the trained models in output/experiments/models (retrains runs already done)",
+    )
+    parser.add_argument("--hub-repo", help="Upload the saved model to this Hugging Face repo")
+    parser.add_argument(
+        "--public", action="store_true", help="Make a new --hub-repo public (default private)"
+    )
     args = parser.parse_args()
+    if args.hub_repo:
+        args.save = True
 
     with open(args.config) as file:
         plan = json.load(file)
@@ -310,8 +416,18 @@ def main():
     experiments = expand(plan["experiments"])
     if args.only:
         experiments = [e for e in experiments if any(e["name"].startswith(o) for o in args.only)]
+    seeds = args.seeds or plan.get("seeds", [42])
+    if args.hub_repo and len(experiments) * len(seeds) != 1:
+        parser.error(
+            "--hub-repo uploads a single model: select one experiment with --only "
+            f"and one seed with --seeds (selected: {[e['name'] for e in experiments]}, {seeds})"
+        )
     if args.rerun and len(results):
         results = results[~results["name"].isin([e["name"] for e in experiments])]
+    if args.save and len(results):
+        # Retrain the selected runs to get their models; their new scores replace the old
+        selected = {(e["name"], seed) for e in experiments for seed in seeds}
+        results = results[[run not in selected for run in zip(results["name"], results["seed"])]]
     done = set(zip(results["name"], results["seed"])) if len(results) else set()
 
     base = plan.get("base", config["finetune"]["base_model"])
@@ -323,19 +439,24 @@ def main():
     test = load_test_data()
 
     for experiment in experiments:
-        for seed in plan.get("seeds", [42]):
+        for seed in seeds:
             if (experiment["name"], seed) in done:
                 print(f"Skipping {experiment['name']} seed {seed}: already in {results_path}")
                 continue
             print(f"=== {experiment['name']} seed {seed}")
             out = OUTPUT_DIR / "checkpoints" / f"{experiment['name']}-seed{seed}"
             row = {"name": experiment["name"], "seed": seed}
-            row.update(run(experiment, seed, base, data, dev, test, config, out))
+            save_dir = (
+                OUTPUT_DIR / "models" / f"{experiment['name']}-seed{seed}" if args.save else None
+            )
+            row.update(run(experiment, seed, base, data, dev, test, config, out, save_dir))
             results = pd.concat([results, pd.DataFrame([row])], ignore_index=True)
             results.to_csv(results_path, index=False)
             print(
                 f"dev macro F1 {row['dev/macro_f1']:.3f}  test macro F1 {row['test/macro_f1']:.3f}"
             )
+            if args.hub_repo:
+                upload(save_dir, args.hub_repo, private=not args.public)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
