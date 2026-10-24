@@ -56,6 +56,16 @@
             }
         },
         {
+            "name": "ettin-1b",
+            "base": "jhu-clsp/ettin-encoder-1b",
+            "finetune_args": {
+                "learning_rate": 1e-05,
+                "per_device_train_batch_size": 16,
+                "gradient_accumulation_steps": 2,
+                "per_device_eval_batch_size": 32
+            }
+        },
+        {
             "name": "fin-modernbert-large",
             "base": "BatuhanECB/FinModernBERT-large-DAPT",
             "finetune_args": {
