@@ -14,6 +14,10 @@ rerunning only runs the new one. Run from the repository root:
 
     python ModernFinTwitBERT/benchmark.py
     python ModernFinTwitBERT/benchmark.py --only fin-modernbert finbert
+
+Add --memory-check to only train each selected base model for 2 steps on the longest
+tweets (real optimizer, same batch settings) and print its peak GPU memory, to see
+whether it fits before starting the full runs. Nothing is saved.
 """
 
 import argparse
@@ -66,9 +70,18 @@ def load_base_model(base: str):
 
 
 def finetune(
-    base: str, seed: int, out: Path, data: tuple, config: dict, overrides: dict
+    base: str,
+    seed: int,
+    out: Path,
+    data: tuple,
+    config: dict,
+    overrides: dict,
+    memory_check: bool = False,
 ):
-    """Fine-tune `base` with the config.json recipe and save the best checkpoint to `out`."""
+    """
+    Fine-tune `base` with the config.json recipe and save the best checkpoint to `out`.
+    With memory_check, train 2 steps on the longest tweets only and print peak memory.
+    """
     tokenizer = AutoTokenizer.from_pretrained(base, cache_dir="models")
     max_length = config["finetune"].get("max_length", 128)
 
@@ -78,6 +91,23 @@ def finetune(
     train, val = (
         split.map(encode, batched=True, remove_columns=["text"]) for split in data
     )
+    if memory_check:
+        steps = 2
+        overrides = {
+            **overrides,
+            "max_steps": steps,
+            "eval_strategy": "no",
+            "save_strategy": "no",
+            "load_best_model_at_end": False,
+        }
+        batch = overrides.get(
+            "per_device_train_batch_size",
+            config["finetune"]["finetune_args"]["per_device_train_batch_size"],
+        ) * overrides.get("gradient_accumulation_steps", 1)
+        # Every batch is as long as our longest tweets, the worst case for memory
+        lengths = [len(ids) for ids in train["input_ids"]]
+        longest = sorted(range(len(lengths)), key=lengths.__getitem__)[-batch * steps :]
+        train = train.select(longest)
 
     args = {
         **config["base_args"],
@@ -97,7 +127,18 @@ def finetune(
     )
     # Our models compute a plain mean loss; let Trainer average it over accumulation
     trainer.model_accepts_loss_kwargs = False
+    if memory_check and torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
     trainer.train()
+    if memory_check:
+        if torch.cuda.is_available():
+            peak = torch.cuda.max_memory_allocated() / 1e9
+            total = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"{base}: peak GPU memory {peak:.1f} of {total:.1f} GB")
+        del trainer
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return
     trainer.save_model(str(out))
     tokenizer.save_pretrained(str(out))
 
@@ -163,6 +204,11 @@ def main():
         action="store_true",
         help="Drop earlier results of the selected entries and run them again",
     )
+    parser.add_argument(
+        "--memory-check",
+        action="store_true",
+        help="Only train 2 steps on the longest tweets and print peak GPU memory",
+    )
     args = parser.parse_args()
 
     with open(args.config) as file:
@@ -193,7 +239,9 @@ def main():
             runs = [(seed, OUTPUT_DIR / name / f"seed{seed}") for seed in seeds]
 
         for seed, model_path in runs:
-            if (name, seed) in done:
+            if args.memory_check and (kind != "base" or seed != seeds[0]):
+                continue
+            if (name, seed) in done and not args.memory_check:
                 print(f"Skipping {name} seed {seed}: already in {results_path}")
                 continue
             print(f"=== {name} ({kind}: {model}) seed {seed}")
@@ -208,7 +256,11 @@ def main():
                     **benchmark.get("finetune_args", {}),
                     **entry.get("finetune_args", {}),
                 }
-                finetune(model, seed, model_path, data, config, overrides)
+                finetune(
+                    model, seed, model_path, data, config, overrides, args.memory_check
+                )
+                if args.memory_check:
+                    continue
 
             row = {"name": name, "kind": kind, "model": model, "seed": seed}
             row.update(
@@ -220,6 +272,8 @@ def main():
             results.to_csv(results_path, index=False)
             print(f"macro F1 {row['test/macro_f1']:.3f}")
 
+    if args.memory_check or not len(results):
+        return
     summary = summarize(results)
     (OUTPUT_DIR / "summary.md").write_text(summary + "\n")
     print(summary)
