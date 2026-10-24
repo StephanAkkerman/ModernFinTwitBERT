@@ -138,10 +138,9 @@ class ModernFinTwitBERT:
         if not os.path.exists("wandb.env"):
             print("No wandb.env file found")
             # Without a key wandb stops the run, so a fresh GPU box would fail at step 0
-            netrc = os.path.expanduser("~/.netrc")
-            logged_in = "WANDB_API_KEY" in os.environ or (
-                os.path.exists(netrc) and "api.wandb.ai" in open(netrc).read()
-            )
+            import wandb
+
+            logged_in = wandb.login(prompt=False)
             if not logged_in and self.mode_args.get("report_to") == "wandb":
                 print("Not logged in to wandb, so not logging the run there")
                 self.mode_args["report_to"] = "none"

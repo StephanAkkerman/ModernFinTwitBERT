@@ -65,10 +65,10 @@ SHORT = {"learning_rate": "lr", "num_train_epochs": "ep", "weight_decay": "wd"}
 
 def wandb_enabled() -> bool:
     """Logged in to wandb by `wandb login` or WANDB_API_KEY."""
-    netrc = Path.home() / ".netrc"
-    return "WANDB_API_KEY" in os.environ or (
-        netrc.exists() and "api.wandb.ai" in netrc.read_text()
-    )
+    import wandb
+
+    # Let wandb resolve credentials: any host, and _netrc on Windows
+    return wandb.login(prompt=False)
 
 
 def expand(experiments: list[dict]) -> list[dict]:
