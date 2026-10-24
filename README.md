@@ -98,6 +98,21 @@ python ModernFinTwitBERT/benchmark.py --only fin-modernbert   # run one entry
 
 Every run is appended to `output/benchmark/results.csv` and runs already there are skipped, so adding a model to `benchmark.json` and rerunning only runs the new one. Add `--rerun` to run the selected entries again from scratch. `output/benchmark/summary.md` has the mean and standard deviation over seeds per model. `macro_f1_low`/`macro_f1_high` is a 95% bootstrap interval over the test tweets: differences inside it are likely noise.
 
+## Experiments 🧪
+
+`ModernFinTwitBERT/experiments.py` fine-tunes the model with every setting in `experiments.json`, once per seed, and logs each run to wandb (project `FinTwitRoBERTa-finetune`, one group per experiment). Run `wandb login` once first; without a login, results are only saved locally.
+
+```bash
+python ModernFinTwitBERT/experiments.py
+python ModernFinTwitBERT/experiments.py --only llrd balanced
+```
+
+- `"grid"` runs every combination of the listed TrainingArguments values as its own experiment, e.g. `grid-lr2e-05-ep3`.
+- `"llrd": 0.9` uses layer-wise learning-rate decay; `"class_weights": "balanced"` weighs the loss by inverse class frequency; any other TrainingArguments (such as `label_smoothing_factor`) go in `"finetune_args"`.
+- Pick the winner by validation F1 (`val/f1`) and use the test scores only to confirm it, so we don't tune on the test set.
+- `test/ece_calibrated` is the calibration error after temperature scaling on the validation set, and `ensemble macro_f1` scores the average of an experiment's seeds.
+- Results go to `output/experiments/results.csv` and `summary.md`; finished runs are skipped on a rerun.
+
 ## Citation ✍️
 <!-- Be sure to adjust everything here so it matches your name and repo -->
 If you use this project in your research, please cite as follows:

@@ -42,7 +42,7 @@
     },
     "finetune": {
         "model_name": "FinTwitRoBERTa-large-sentiment",
-        "base_model": "cardiffnlp/twitter-roberta-large-2022-154m",
+        "base_model": "StephanAkkerman/FinTwitRoBERTa-large",
         "do_hyperopt": false,
         "hyperopt_trials": 20,
         "max_length": 128,

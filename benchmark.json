@@ -56,6 +56,13 @@
             }
         },
         {
+            "name": "fintwitroberta-large",
+            "base": "StephanAkkerman/FinTwitRoBERTa-large",
+            "finetune_args": {
+                "learning_rate": 2e-05
+            }
+        },
+        {
             "name": "twitter-roberta-large-2022",
             "base": "cardiffnlp/twitter-roberta-large-2022-154m",
             "finetune_args": {
