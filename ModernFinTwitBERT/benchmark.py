@@ -95,6 +95,8 @@ def finetune(
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
         compute_metrics=compute_metrics,
     )
+    # Our models compute a plain mean loss; let Trainer average it over accumulation
+    trainer.model_accepts_loss_kwargs = False
     trainer.train()
     trainer.save_model(str(out))
     tokenizer.save_pretrained(str(out))
