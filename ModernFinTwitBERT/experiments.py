@@ -2,9 +2,11 @@
 Fine-tuning experiments: hyperparameter grids and training methods, tracked in wandb.
 
 Each experiment in experiments.json fine-tunes the base model once per seed and records
-validation and test scores. Pick the best experiment by validation macro F1 (`val_f1`)
-and use the test set only to confirm it: choosing by test score would tune on the test
-set, and with 1,237 tweets the noise is about as large as the differences we look for.
+validation, dev and test scores. Pick the best experiment by dev macro F1
+(`dev/macro_f1`) and use the test set only to confirm it: choosing by test score would
+tune on the test set. The dev set (data/test/dev_v0.csv) comes from the same feed as the
+test set; the validation split comes from the training sources, which are labeled and
+balanced differently, and ranked experiments almost in reverse order of test.
 
 Experiment options, on top of TrainingArguments (finetune_args):
 - "grid": {"learning_rate": [1e-5, 2e-5]} runs every combination as its own experiment
@@ -13,7 +15,7 @@ Experiment options, on top of TrainingArguments (finetune_args):
   some precision for bullish/bearish recall
 - label_smoothing_factor, warmup_steps, weight_decay, ... are TrainingArguments
 
-After training, a temperature is fitted on the validation set, so `test/ece_calibrated`
+After training, a temperature is fitted on the dev set, so `test/ece_calibrated`
 shows how reliable the confidence scores can be made. Test probabilities are saved per
 run, and the summary also scores the average of each experiment's seeds (an ensemble).
 
@@ -46,10 +48,11 @@ from transformers import (
     TrainingArguments,
 )
 
-from data import LABELS, load_finetuning_data, load_test_data
+from data import LABELS, load_dev_data, load_finetuning_data, load_test_data
 
 OUTPUT_DIR = Path("output/experiments")
 SUMMARY_COLUMNS = [
+    "dev/macro_f1",
     "val/f1",
     "test/macro_f1",
     "test/precision_bullish",
@@ -162,7 +165,9 @@ def test_metrics(probs: np.ndarray, test: pd.DataFrame, prefix: str = "test") ->
     return {k.replace("test/", f"{prefix}/"): float(v) for k, v in output.items()}
 
 
-def run(experiment: dict, seed: int, base: str, data: tuple, test, config: dict, out: Path):
+def run(
+    experiment: dict, seed: int, base: str, data: tuple, dev, test, config: dict, out: Path
+):
     tokenizer = AutoTokenizer.from_pretrained(base, cache_dir="models")
     max_length = config["finetune"].get("max_length", 128)
 
@@ -170,6 +175,7 @@ def run(experiment: dict, seed: int, base: str, data: tuple, test, config: dict,
         return tokenizer(batch["text"], truncation=True, max_length=max_length)
 
     train, val = (split.map(encode, batched=True, remove_columns=["text"]) for split in data)
+    dev_encoded = dev.map(encode, batched=True, remove_columns=["text", "file"])
     test_encoded = test.map(encode, batched=True, remove_columns=["text", "file"])
 
     use_wandb = wandb_enabled()
@@ -220,18 +226,19 @@ def run(experiment: dict, seed: int, base: str, data: tuple, test, config: dict,
 
     # The best checkpoint is loaded at the end of training
     val_output = trainer.predict(val)
-    temperature = fit_temperature(val_output.predictions, val_output.label_ids)
+    dev_output = trainer.predict(dev_encoded)
+    temperature = fit_temperature(dev_output.predictions, dev_output.label_ids)
     logits = trainer.predict(test_encoded).predictions
     probs = torch.softmax(torch.tensor(logits, dtype=torch.float32), -1).numpy()
     calibrated = torch.softmax(torch.tensor(logits / temperature, dtype=torch.float32), -1).numpy()
+    dev_probs = torch.softmax(torch.tensor(dev_output.predictions, dtype=torch.float32), -1)
 
-    test_df = test.to_pandas()
-    test_df["label"] = test_df["label"].map(dict(enumerate(LABELS)))
     row = {
+        **test_metrics(dev_probs.numpy(), labeled(dev), prefix="dev"),
         "val/f1": val_output.metrics["test_f1"],
         "temperature": temperature,
-        **test_metrics(probs, test_df),
-        "test/ece_calibrated": test_metrics(calibrated, test_df)["test/ece"],
+        **test_metrics(probs, labeled(test)),
+        "test/ece_calibrated": test_metrics(calibrated, labeled(test))["test/ece"],
     }
     if use_wandb:
         wandb.log({k: v for k, v in row.items()})
@@ -242,16 +249,28 @@ def run(experiment: dict, seed: int, base: str, data: tuple, test, config: dict,
     return row
 
 
+def labeled(dataset) -> pd.DataFrame:
+    """A dev or test set as a DataFrame with label names, as score() expects."""
+    df = dataset.to_pandas()
+    df["label"] = df["label"].map(dict(enumerate(LABELS)))
+    return df
+
+
 def summarize(results: pd.DataFrame, test_df: pd.DataFrame) -> str:
-    """Mean ± std over seeds per experiment, best validation F1 first, plus the ensemble."""
+    """Mean ± std over seeds per experiment, best dev F1 first, plus the ensemble."""
     metrics = [c for c in SUMMARY_COLUMNS if c in results]
     grouped = results.groupby("name", sort=False)
     mean, std, runs = grouped[metrics].mean(), grouped[metrics].std(), grouped.size()
 
     rows = []
-    for name in mean.sort_values("val/f1", ascending=False).index:
+    # Runs from before the dev set existed have no dev score and sort last
+    order = "dev/macro_f1" if "dev/macro_f1" in mean else "val/f1"
+    for name in mean.sort_values(order, ascending=False).index:
         row = {"experiment": name, "runs": runs[name]}
         for metric in metrics:
+            if pd.isna(mean.loc[name, metric]):
+                row[metric] = ""
+                continue
             value = f"{mean.loc[name, metric]:.3f}"
             if runs[name] > 1:
                 value += f" ± {std.loc[name, metric]:.3f}"
@@ -300,9 +319,8 @@ def main():
         drop_sources=config["finetune"].get("drop_sources"),
         relabel=config["finetune"].get("relabel", True),
     )
+    dev = load_dev_data()
     test = load_test_data()
-    test_df = test.to_pandas()
-    test_df["label"] = test_df["label"].map(dict(enumerate(LABELS)))
 
     for experiment in experiments:
         for seed in plan.get("seeds", [42]):
@@ -312,14 +330,16 @@ def main():
             print(f"=== {experiment['name']} seed {seed}")
             out = OUTPUT_DIR / "checkpoints" / f"{experiment['name']}-seed{seed}"
             row = {"name": experiment["name"], "seed": seed}
-            row.update(run(experiment, seed, base, data, test, config, out))
+            row.update(run(experiment, seed, base, data, dev, test, config, out))
             results = pd.concat([results, pd.DataFrame([row])], ignore_index=True)
             results.to_csv(results_path, index=False)
-            print(f"val F1 {row['val/f1']:.3f}  test macro F1 {row['test/macro_f1']:.3f}")
+            print(
+                f"dev macro F1 {row['dev/macro_f1']:.3f}  test macro F1 {row['test/macro_f1']:.3f}"
+            )
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-    summary = summarize(results, test_df)
+    summary = summarize(results, labeled(test))
     (OUTPUT_DIR / "summary.md").write_text(summary + "\n")
     print(summary)
 

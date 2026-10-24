@@ -23,6 +23,12 @@ LABELS = ["neutral", "bullish", "bearish"]
 # keep them out of pretraining even when their text was reformatted
 HELDOUT_IDS_PATH = TEST_SET_PATH.parent / "heldout_ids_v0.txt"
 
+# Dev set: tweets from the same feed, 2024 onwards, labeled with the same guideline, for
+# choosing between experiments so the test set stays untouched. dev_ids_v0.txt lists all
+# 750 dev candidates (the unsure ones too), kept out of training like the test tweets.
+DEV_SET_PATH = TEST_SET_PATH.parent / "dev_v0.csv"
+DEV_IDS_PATH = TEST_SET_PATH.parent / "dev_ids_v0.txt"
+
 # Cleaned pretraining tweets, one folder per version of the sources, this file and the
 # test set, so changing any of them cleans again
 PRETRAIN_CACHE = Path("datasets") / "pretrain_clean"
@@ -105,8 +111,9 @@ def dedup_key(text: str) -> str:
 
 
 def test_set_keys() -> set:
-    """Dedup keys of the frozen test set, to remove its tweets from any training data."""
-    return set(pd.read_csv(TEST_SET_PATH)["text"].map(dedup_key))
+    """Dedup keys of the frozen test set and the dev set, to remove them from training data."""
+    texts = pd.concat([pd.read_csv(path)["text"] for path in (TEST_SET_PATH, DEV_SET_PATH)])
+    return set(texts.map(dedup_key))
 
 
 def split_dataset(
@@ -152,7 +159,7 @@ def load_pretraining_source(source: dict) -> Dataset:
         dataset = load_dataset(builder, data_files=name, split="train")
     else:
         dataset = load_dataset(name, split="train", cache_dir="datasets")
-    heldout_ids = set(HELDOUT_IDS_PATH.read_text().split())
+    heldout_ids = set(HELDOUT_IDS_PATH.read_text().split() + DEV_IDS_PATH.read_text().split())
     id_column = next((c for c in ("tweet_id", "url") if c in dataset.column_names), None)
     status = re.compile(r"(\d+)$" if id_column == "tweet_id" else r"status/(\d+)")
 
@@ -197,7 +204,7 @@ def load_pretraining_data(
     version = hashlib.blake2b(digest_size=4)
     for part in parts:
         version.update(part._fingerprint.encode())
-    for path in (Path(__file__), TEST_SET_PATH, HELDOUT_IDS_PATH):
+    for path in (Path(__file__), TEST_SET_PATH, HELDOUT_IDS_PATH, DEV_SET_PATH, DEV_IDS_PATH):
         version.update(path.read_bytes())
     cache = PRETRAIN_CACHE / version.hexdigest()
 
@@ -549,6 +556,18 @@ def load_test_data() -> Dataset:
         The test dataset, with the same preprocessing as the training data.
     """
     dataframe = pd.read_csv(TEST_SET_PATH)
+    dataframe["label"] = dataframe["label"].map(LABELS.index)
+    dataframe["text"] = dataframe["text"].apply(preprocess_tweet)
+    return Dataset.from_pandas(dataframe[["text", "label", "file"]])
+
+
+def load_dev_data() -> Dataset:
+    """
+    Loads the dev set, with the same labels and preprocessing as the test set. The `file`
+    column says how a tweet was sampled: "random", or "bearish_keywords" for the extra
+    tweets picked by bearish words because a random sample had too few bearish ones.
+    """
+    dataframe = pd.read_csv(DEV_SET_PATH).rename(columns={"sample": "file"})
     dataframe["label"] = dataframe["label"].map(LABELS.index)
     dataframe["text"] = dataframe["text"].apply(preprocess_tweet)
     return Dataset.from_pandas(dataframe[["text", "label", "file"]])

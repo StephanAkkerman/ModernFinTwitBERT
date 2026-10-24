@@ -109,8 +109,8 @@ python ModernFinTwitBERT/experiments.py --only llrd balanced
 
 - `"grid"` runs every combination of the listed TrainingArguments values as its own experiment, e.g. `grid-lr2e-05-ep3`.
 - `"llrd": 0.9` uses layer-wise learning-rate decay; `"class_weights": "balanced"` weighs the loss by inverse class frequency; any other TrainingArguments (such as `label_smoothing_factor`) go in `"finetune_args"`.
-- Pick the winner by validation F1 (`val/f1`) and use the test scores only to confirm it, so we don't tune on the test set.
-- `test/ece_calibrated` is the calibration error after temperature scaling on the validation set, and `ensemble macro_f1` scores the average of an experiment's seeds.
+- Pick the winner by dev macro F1 (`dev/macro_f1`) and use the test scores only to confirm it, so we don't tune on the test set. The dev set (`data/test/dev_v0.csv`, 646 tweets from 2024 onwards) comes from the same feed and guideline as the test set. `val/f1` is on a split of the training sources and is not a good guide: it ranked the first round of experiments almost in reverse order of test.
+- `test/ece_calibrated` is the calibration error after temperature scaling on the dev set, and `ensemble macro_f1` scores the average of an experiment's seeds.
 - Results go to `output/experiments/results.csv` and `summary.md`; finished runs are skipped on a rerun.
 
 ## Citation ✍️
