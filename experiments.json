@@ -1,0 +1,12 @@
+{
+    "seeds": [42, 43, 44],
+    "experiments": [
+        {
+            "name": "grid",
+            "grid": {"learning_rate": [1e-05, 2e-05, 3e-05], "num_train_epochs": [2, 3]}
+        },
+        {"name": "llrd-0.9", "llrd": 0.9},
+        {"name": "balanced", "class_weights": "balanced"},
+        {"name": "smoothing-0.1", "finetune_args": {"label_smoothing_factor": 0.1}}
+    ]
+}
