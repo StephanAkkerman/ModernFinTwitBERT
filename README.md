@@ -113,6 +113,17 @@ python ModernFinTwitBERT/experiments.py --only llrd balanced
 - `test/ece_calibrated` is the calibration error after temperature scaling on the dev set, and `ensemble macro_f1` scores the average of an experiment's seeds.
 - Results go to `output/experiments/results.csv` and `summary.md`; finished runs are skipped on a rerun.
 
+### Confidence thresholds
+
+`ModernFinTwitBERT/thresholds.py` tunes how confident the model must be before a tweet counts as bullish or bearish (below the threshold it is neutral). It picks, per class, the lowest threshold whose dev precision reaches `--target-precision` (default 0.9), confirms it on the test set and writes the full tradeoff tables to `output/thresholds/`. Rerun it after every retrain.
+
+```bash
+python ModernFinTwitBERT/thresholds.py
+python ModernFinTwitBERT/thresholds.py --model output/experiments/models/llrd-0.9-seed42 --recompute --save
+```
+
+`--save` stores them in the model config as `decision_thresholds`, and `--hub-repo` uploads that config to Hugging Face.
+
 ## Citation ✍️
 <!-- Be sure to adjust everything here so it matches your name and repo -->
 If you use this project in your research, please cite as follows:
