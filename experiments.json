@@ -34,6 +34,16 @@
             }
         },
         {
+            "name": "llrd-0.9-feed",
+            "llrd": 0.9,
+            "extra_train": [{"path": "data/train/feed_v1.csv"}]
+        },
+        {
+            "name": "llrd-0.9-feed-x3",
+            "llrd": 0.9,
+            "extra_train": [{"path": "data/train/feed_v1.csv", "repeat": 3}]
+        },
+        {
             "name": "llrd-balanced",
             "llrd": 0.9,
             "class_weights": "balanced"

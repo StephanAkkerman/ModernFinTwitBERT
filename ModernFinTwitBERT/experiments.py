@@ -14,6 +14,8 @@ Experiment options, on top of TrainingArguments (finetune_args):
 - "class_weights": "balanced" weighs the loss by inverse class frequency, which trades
   some precision for bullish/bearish recall
 - label_smoothing_factor, warmup_steps, weight_decay, ... are TrainingArguments
+- "extra_train": [{"path": "data/train/feed_v1.csv", "repeat": 3}] adds labeled CSV files
+  to the training split (not validation); without it, finetune "extra_train" in config.json
 
 After training, a temperature is fitted on the dev set, so `test/ece_calibrated`
 shows how reliable the confidence scores can be made. Test probabilities are saved per
@@ -431,10 +433,20 @@ def main():
     done = set(zip(results["name"], results["seed"])) if len(results) else set()
 
     base = plan.get("base", config["finetune"]["base_model"])
-    data = load_finetuning_data(
-        drop_sources=config["finetune"].get("drop_sources"),
-        relabel=config["finetune"].get("relabel", True),
-    )
+    # Experiments with the same extra training files share one copy of the data
+    datasets = {}
+
+    def finetuning_data(experiment: dict) -> tuple:
+        extra = experiment.get("extra_train", config["finetune"].get("extra_train"))
+        key = json.dumps(extra)
+        if key not in datasets:
+            datasets[key] = load_finetuning_data(
+                drop_sources=config["finetune"].get("drop_sources"),
+                relabel=config["finetune"].get("relabel", True),
+                extra_train=extra,
+            )
+        return datasets[key]
+
     dev = load_dev_data()
     test = load_test_data()
 
@@ -449,7 +461,9 @@ def main():
             save_dir = (
                 OUTPUT_DIR / "models" / f"{experiment['name']}-seed{seed}" if args.save else None
             )
-            row.update(run(experiment, seed, base, data, dev, test, config, out, save_dir))
+            row.update(
+                run(experiment, seed, base, finetuning_data(experiment), dev, test, config, out, save_dir)
+            )
             results = pd.concat([results, pd.DataFrame([row])], ignore_index=True)
             results.to_csv(results_path, index=False)
             print(

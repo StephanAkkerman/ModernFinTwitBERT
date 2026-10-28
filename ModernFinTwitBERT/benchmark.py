@@ -251,6 +251,7 @@ def main():
                     data = load_finetuning_data(
                         drop_sources=config["finetune"].get("drop_sources"),
                         relabel=config["finetune"].get("relabel", True),
+                        extra_train=config["finetune"].get("extra_train"),
                     )
                 overrides = {
                     **benchmark.get("finetune_args", {}),

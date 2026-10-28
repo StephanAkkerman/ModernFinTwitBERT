@@ -40,6 +40,12 @@ DEFAULT_PRETRAIN_DATASETS = [{"name": "StephanAkkerman/crypto-stock-tweets"}]
 # by hand to the same guideline as the test set (columns: tweet, label). Most become neutral.
 RELABELS_PATH = Path(__file__).parent.parent / "data" / "train" / "relabels_v1.csv"
 
+# Extra training files are relative to the repository root, e.g. data/train/feed_v1.csv:
+# 1,500 tweets from the same feed as the dev and test sets (2024 onwards, none of the dev
+# or test tweets), picked where the model was least sure and labeled with the guideline
+# (columns: tweet_id, text, label, label_source)
+REPO_ROOT = Path(__file__).parent.parent
+
 # Short names for the sources in TimKoornstra/financial-tweets-sentiment (url column)
 SOURCES = {
     "moritzwilksch": "moritz",
@@ -320,8 +326,31 @@ def clean_pretraining_tweets(dataset: Dataset) -> Dataset:
     )
 
 
+def load_extra_training(extra: list[dict]) -> Dataset:
+    """
+    Labeled tweets from local CSV files (columns text and label), each
+    {"path": "data/train/feed_v1.csv", "repeat": default 1}, without dev or test tweets.
+    """
+    parts = []
+    for source in extra:
+        dataframe = pd.read_csv(REPO_ROOT / source["path"])[["text", "label"]]
+        unknown = set(dataframe["label"]) - set(LABELS)
+        if unknown:
+            raise ValueError(f"Unknown labels in {source['path']}: {unknown}")
+        dataframe["label"] = dataframe["label"].map(LABELS.index)
+        dataframe = dataframe[~dataframe["text"].map(dedup_key).isin(test_set_keys())]
+        # Repeat after preprocessing, which drops duplicates
+        dataset = preprocess_dataset(Dataset.from_pandas(dataframe, preserve_index=False))
+        print(f"{source['path']}: {len(dataset):,} tweets x{source.get('repeat', 1)}")
+        parts += [dataset] * source.get("repeat", 1)
+    return concatenate_datasets(parts).cast_column("label", ClassLabel(names=LABELS))
+
+
 def load_finetuning_data(
-    val_size: float = 0.1, drop_sources: list[str] | None = None, relabel: bool = True
+    val_size: float = 0.1,
+    drop_sources: list[str] | None = None,
+    relabel: bool = True,
+    extra_train: list[dict] | None = None,
 ) -> tuple:
     """
     Loads and cleans the finetuning data and splits it into a training and validation set.
@@ -335,6 +364,10 @@ def load_finetuning_data(
         Sources to leave out, by their short name in `SOURCES`, e.g. ["mattgilgo"]
     relabel : bool, optional
         Replace labels with the guideline relabels in `RELABELS_PATH`, by default True
+    extra_train : list[dict], optional
+        Extra labeled CSV files added to the training split only, see
+        `load_extra_training`, e.g. [{"path": "data/train/feed_v1.csv"}]. The validation
+        split stays the same, so runs with and without them are compared on equal terms.
 
     Returns
     -------
@@ -379,7 +412,11 @@ def load_finetuning_data(
     split = dataset.cast_column("label", ClassLabel(names=LABELS)).train_test_split(
         test_size=val_size, seed=42, stratify_by_column="label"
     )
-    return split["train"], split["test"]
+    train = split["train"]
+    if extra_train:
+        extra = load_extra_training(extra_train).cast(train.features)
+        train = concatenate_datasets([train, extra]).shuffle(seed=42)
+    return train, split["test"]
 
 
 def simple_oversample(dataset: Dataset) -> pd.DataFrame:

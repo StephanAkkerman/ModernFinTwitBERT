@@ -126,6 +126,7 @@ class ModernFinTwitBERT:
             self.train, self.val = load_finetuning_data(
                 drop_sources=self.config[self.mode].get("drop_sources"),
                 relabel=self.config[self.mode].get("relabel", True),
+                extra_train=self.config[self.mode].get("extra_train"),
             )
 
         self.max_length = self.config[self.mode].get("max_length", 128)
