@@ -15,18 +15,22 @@ Run from the repository root:
     python ModernFinTwitBERT/thresholds.py --target-precision 0.9 --save
 
 --save writes the thresholds to the model's config as `decision_thresholds`
-({"bullish": t, "bearish": t}); --hub-repo also uploads that config to Hugging Face.
+({"bullish": t, "bearish": t}) and, for a local model with a README.md (from
+experiments.py --save), adds them to its model card; --hub-repo also uploads the config
+and card to Hugging Face.
 The tradeoff tables and probabilities go to output/thresholds/<model>/; the probabilities
 are reused on the next run, so pass --recompute after retraining a local model.
 """
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
+from huggingface_hub import HfApi
 from sklearn.metrics import f1_score
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
@@ -96,6 +100,29 @@ def pick(table: pd.DataFrame, label: str, target: float) -> float:
     return float(table["threshold"][holds].iloc[0]) if holds.any() else float(GRID[-1])
 
 
+def update_card(card: str, thresholds: dict, report: pd.DataFrame, target: float) -> str:
+    """The model card with a section on the thresholds, replacing an earlier one."""
+    rows = [list(report.columns)] + report.astype(str).values.tolist()
+    table = "\n".join("| " + " | ".join(row) + " |" for row in rows)
+    table = table.replace("\n", "\n| " + " | ".join("---" for _ in rows[0]) + " |\n", 1)
+    section = f"""## Decision thresholds
+
+`config.decision_thresholds` = `{json.dumps(thresholds)}`, tuned on the dev set for
+precision >= {target}. Call a tweet bullish or bearish only when its calibrated
+probability for that class reaches the threshold, otherwise neutral:
+
+```python
+label = model.config.id2label[int(probs[0].argmax())].lower()
+if label != "neutral" and probs[0].max() < model.config.decision_thresholds[label]:
+    label = "neutral"
+```
+
+{table}
+"""
+    card = re.sub(r"## Decision thresholds\n.*?(?=\n## |\Z)", "", card, flags=re.DOTALL)
+    return card.rstrip() + "\n\n" + section
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--model", default="StephanAkkerman/FinTwitRoBERTa-sentiment")
@@ -148,14 +175,26 @@ def main():
 
     if args.save or args.hub_repo:
         model.config.decision_thresholds = thresholds
+        readme = Path(args.model) / "README.md"
         if Path(args.model).is_dir():
             model.config.save_pretrained(args.model)
             print(f"\nSaved decision_thresholds to {args.model}/config.json")
+            if readme.exists():
+                text = update_card(readme.read_text(), thresholds, report, args.target_precision)
+                if args.hub_repo:
+                    text = text.replace("<this repo>", args.hub_repo)
+                readme.write_text(text)
+                print(f"Added the thresholds to {readme}")
         if args.hub_repo:
-            model.config.push_to_hub(
-                args.hub_repo,
-                commit_message=f"Add decision_thresholds (dev precision >= {args.target_precision})",
-            )
+            message = f"Add decision_thresholds (dev precision >= {args.target_precision})"
+            model.config.push_to_hub(args.hub_repo, commit_message=message)
+            if readme.exists():
+                HfApi().upload_file(
+                    path_or_fileobj=str(readme),
+                    path_in_repo="README.md",
+                    repo_id=args.hub_repo,
+                    commit_message=message,
+                )
             print(f"Uploaded config with decision_thresholds to {args.hub_repo}")
     (out / "thresholds.json").write_text(json.dumps(thresholds, indent=2))
 
