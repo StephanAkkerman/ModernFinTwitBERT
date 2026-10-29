@@ -3,15 +3,17 @@
 # SSH connection does not stop it:
 #
 #     tmux new -s pretrain
-#     HF_REPO=StephanAkkerman/FinTwitRoBERTa-large bash scripts/pretrain_remote.sh
+#     bash scripts/pretrain_remote.sh
 #
-# Running it again resumes from the last checkpoint. With HF_REPO set (and logged in with
-# `hf auth login` or HF_TOKEN), the model is uploaded as a private repo when done, so
-# nothing is lost when the rental ends. On RunPod the pod then stops itself, so billing
-# stops too (set STOP_POD=0 to keep it running). Clone into /workspace: it survives a stop.
+# Running it again resumes from the last checkpoint. When done, the model is uploaded to
+# HF_REPO (default: pretrain.hub_repo in config.json; log in with `hf auth login` or
+# HF_TOKEN first), together with its model card (README.md, with the perplexity) and
+# pretrain_stats.json. A new repo is created private. Nothing is lost when the rental
+# ends: on RunPod the pod then stops itself, so billing stops too (set STOP_POD=0 to keep
+# it running). Clone into /workspace: it survives a stop.
 set -euo pipefail
 
-HF_REPO=${HF_REPO:-}
+HF_REPO=${HF_REPO:-$(python -c "import json; print(json.load(open('config.json'))['pretrain'].get('hub_repo', ''))")}
 TRIAL_STEPS=${TRIAL_STEPS:-50}
 
 # Use the image's PyTorch, which matches the machine's CUDA driver. RoBERTa does not use
