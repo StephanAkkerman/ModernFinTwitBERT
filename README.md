@@ -70,7 +70,7 @@ print(f"Predicted sentiment: {predicted_class}")
 
 Training is configured in `config.json` and run from the repository root with `python ModernFinTwitBERT/model.py`. The base model is `cardiffnlp/twitter-roberta-large-2022-154m`, which scored best in the benchmark (macro F1 0.807 on the test set).
 
-1. **Domain pretraining:** set `"mode": "pretrain"`. This continues masked-language-model training on `StephanAkkerman/crypto-stock-tweets` (with the test tweets removed) and saves to `output/<pretrain model_name>`. One epoch takes a few hours on an A100.
+1. **Domain pretraining:** set `"mode": "pretrain"`. This continues masked-language-model training on the sources in `pretrain.datasets` (by default `StephanAkkerman/financial-tweets`, shown 3 times, and `StephanAkkerman/crypto-stock-tweets`, with the test and dev tweets removed) and saves to `output/<pretrain model_name>`. One epoch takes a few hours on an A100. The released result is [FinTwitRoBERTa-large](https://huggingface.co/StephanAkkerman/FinTwitRoBERTa-large); its model card is in `model_cards/FinTwitRoBERTa-large.md`, upload it as the repo's `README.md` after a new run (and update its numbers).
 
    - On a rented GPU, `scripts/pretrain_remote.sh` does all of this: it installs the requirements (without flash-attn, which RoBERTa does not use), runs a 50-step trial, then the full run, and uploads the model to a private Hugging Face repo if `HF_REPO` is set.
    - Start with `python ModernFinTwitBERT/model.py --max-steps 50`: a short trial run that saves nothing, to check speed and memory on a new GPU.
