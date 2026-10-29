@@ -125,6 +125,22 @@ python ModernFinTwitBERT/thresholds.py --model output/experiments/models/llrd-0.
 
 `--save` stores them in the model config as `decision_thresholds`, and `--hub-repo` uploads that config to Hugging Face.
 
+### Small and fast inference (ONNX int8)
+
+`ModernFinTwitBERT/export_onnx.py` exports the model to ONNX with int8 weights (per-channel dynamic quantization). It is about 4x smaller (358 MB instead of 1.4 GB) and 4x faster on CPU, with the same dev and test F1. The script checks this on both sets and `--hub-repo` uploads the result as `onnx/model_int8.onnx`.
+
+```bash
+python ModernFinTwitBERT/export_onnx.py --hub-repo StephanAkkerman/FinTwitRoBERTa-sentiment
+```
+
+`ModernFinTwitBERT/onnx_predict.py` runs that model with only `onnxruntime`, `tokenizers` and `huggingface_hub` (no torch), and applies the preprocessing, calibration temperature and decision thresholds:
+
+```python
+from onnx_predict import OnnxSentiment
+
+OnnxSentiment().predict(["$NVDA breaking out, adding here"])
+```
+
 ## Citation ✍️
 <!-- Be sure to adjust everything here so it matches your name and repo -->
 If you use this project in your research, please cite as follows:
