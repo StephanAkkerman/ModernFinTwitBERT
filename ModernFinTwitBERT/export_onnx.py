@@ -28,13 +28,13 @@ import numpy as np
 import pandas as pd
 import torch
 from huggingface_hub import HfApi, hf_hub_download
+from onnx_predict import ONNX_FILE, OnnxSentiment
 from onnxruntime.quantization import QuantType, quantize_dynamic
 from onnxruntime.quantization.shape_inference import quant_pre_process
+from thresholds import apply_thresholds, metrics, predict_probs
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from data import load_dev_data, load_test_data
-from onnx_predict import ONNX_FILE, OnnxSentiment
-from thresholds import apply_thresholds, metrics, predict_probs
 
 LATENCY_TWEETS = 100
 
@@ -81,7 +81,9 @@ def latency(predict, tweets: list[str]) -> float:
     return (time.perf_counter() - start) / len(tweets) * 1000
 
 
-def update_card(card: str, report: pd.DataFrame, speed: dict, sizes: dict, repo: str) -> str:
+def update_card(
+    card: str, report: pd.DataFrame, speed: dict, sizes: dict, repo: str
+) -> str:
     """The model card with a section on the ONNX int8 model, replacing an earlier one."""
     rows = [list(report.columns)] + report.astype(str).values.tolist()
     table = "\n".join("| " + " | ".join(row) + " |" for row in rows)
@@ -132,7 +134,9 @@ both models give the same argmax label:
     if pattern.search(card):
         return pattern.sub(lambda _: section.rstrip() + "\n", card, count=1)
     if "\n## Citing & Authors" in card:
-        return card.replace("\n## Citing & Authors", "\n" + section + "\n## Citing & Authors", 1)
+        return card.replace(
+            "\n## Citing & Authors", "\n" + section + "\n## Citing & Authors", 1
+        )
     return card.rstrip() + "\n\n" + section
 
 
@@ -152,6 +156,7 @@ def main():
     int8 = export(model, tokenizer, folder)
     print(f"Saved {int8} ({int8.stat().st_size / 1e6:.0f} MB)\n")
 
+    print("Checking the ONNX model against the PyTorch model on dev and test sets...")
     onnx_model = OnnxSentiment(str(folder))
     thresholds = getattr(model.config, "decision_thresholds", None) or {}
     report = []
@@ -194,7 +199,9 @@ def main():
     if readme.exists():
         card = readme.read_text()
     elif args.hub_repo or not Path(args.model).is_dir():
-        card = Path(hf_hub_download(args.hub_repo or args.model, "README.md")).read_text()
+        card = Path(
+            hf_hub_download(args.hub_repo or args.model, "README.md")
+        ).read_text()
     else:
         card = ""
     card = update_card(card, report, speed, sizes, args.hub_repo or args.model)
