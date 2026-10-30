@@ -31,6 +31,7 @@ import pandas as pd
 import torch
 from huggingface_hub import HfApi
 from sklearn.metrics import f1_score
+from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from data import LABELS, load_dev_data, load_test_data
@@ -41,12 +42,16 @@ GRID = np.round(np.arange(0.34, 1.0, 0.01), 2)
 
 
 def predict_probs(
-    model, tokenizer, texts: list[str], batch_size: int = 32
+    model, tokenizer, texts: list[str], batch_size: int = 32, progress: str | None = None
 ) -> np.ndarray:
-    """Calibrated class probabilities (logits / config.calibration_temperature)."""
+    """
+    Calibrated class probabilities (logits / config.calibration_temperature), on the
+    model's device. `progress` is the label of a progress bar (none by default).
+    """
     temperature = getattr(model.config, "calibration_temperature", 1.0) or 1.0
     probs = []
-    for start in range(0, len(texts), batch_size):
+    starts = range(0, len(texts), batch_size)
+    for start in tqdm(starts, desc=progress, disable=progress is None):
         inputs = tokenizer(
             texts[start : start + batch_size],
             return_tensors="pt",
@@ -55,8 +60,8 @@ def predict_probs(
             max_length=128,
         )
         with torch.no_grad():
-            logits = model(**inputs).logits
-        probs.append((logits / temperature).softmax(-1).numpy())
+            logits = model(**inputs.to(model.device)).logits
+        probs.append((logits / temperature).softmax(-1).cpu().numpy())
     return np.concatenate(probs)
 
 
@@ -147,7 +152,7 @@ def main():
         if cache.exists() and not args.recompute:
             probs = np.load(cache)
         else:
-            probs = predict_probs(model, tokenizer, df["text"].tolist())
+            probs = predict_probs(model, tokenizer, df["text"].tolist(), progress=name)
             np.save(cache, probs)
         splits[name] = (probs, df["label"].to_numpy())
         sweep(probs, splits[name][1]).to_csv(out / f"sweep_{name}.csv", index=False)
