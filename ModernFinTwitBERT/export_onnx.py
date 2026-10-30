@@ -158,6 +158,8 @@ def main():
 
     print("Checking the ONNX model against the PyTorch model on dev and test sets...")
     onnx_model = OnnxSentiment(str(folder))
+    # The fp32 reference runs on the GPU when there is one; ONNX int8 always runs on CPU
+    model.to("cuda" if torch.cuda.is_available() else "cpu")
     thresholds = getattr(model.config, "decision_thresholds", None) or {}
     report = []
     for name, dataset in (("dev", load_dev_data()), ("test", load_test_data())):
@@ -165,8 +167,10 @@ def main():
         labels = df["label"].to_numpy()
         # The datasets are already preprocessed; preprocess_tweet leaves such text unchanged
         probs = {
-            "fp32": predict_probs(model, tokenizer, df["text"].tolist()),
-            "int8": onnx_model.probs(df["text"].tolist()),
+            "fp32": predict_probs(
+                model, tokenizer, df["text"].tolist(), progress=f"{name} fp32"
+            ),
+            "int8": onnx_model.probs(df["text"].tolist(), progress=f"{name} int8"),
         }
         same = np.mean(probs["fp32"].argmax(1) == probs["int8"].argmax(1))
         for setting, t in (("argmax", {}), ("thresholds", thresholds)):
@@ -184,6 +188,8 @@ def main():
     report.to_csv(folder / "report.csv", index=False)
     print(report.to_string(index=False))
 
+    print(f"\nTiming both models on {LATENCY_TWEETS} tweets, one at a time, on CPU...")
+    model.to("cpu")
     tweets = load_test_data()[:LATENCY_TWEETS]["text"]
     speed = {
         "fp32": latency(lambda x: predict_probs(model, tokenizer, x), tweets),

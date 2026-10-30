@@ -1,6 +1,6 @@
 """
 Sentiment of tweets with the int8 ONNX export of FinTwitRoBERTa-sentiment (export_onnx.py).
-Needs only numpy, onnxruntime, tokenizers and huggingface_hub, no torch or transformers, so
+Needs only numpy, onnxruntime, tokenizers and huggingface_hub (which brings tqdm), no torch or transformers, so
 it runs on a small device such as a Raspberry Pi.
 
 Applies the same preprocessing as training, the calibration temperature and the decision
@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
+from tqdm import tqdm
 
 from preprocess import preprocess_tweet
 
@@ -60,11 +61,17 @@ class OnnxSentiment:
             str(folder / ONNX_FILE), options, providers=["CPUExecutionProvider"]
         )
 
-    def probs(self, tweets: list[str], batch_size: int = 32) -> np.ndarray:
-        """Calibrated class probabilities, in the order of self.labels."""
+    def probs(
+        self, tweets: list[str], batch_size: int = 32, progress: str | None = None
+    ) -> np.ndarray:
+        """
+        Calibrated class probabilities, in the order of self.labels. `progress` is the
+        label of a progress bar (none by default).
+        """
         texts = [preprocess_tweet(tweet) for tweet in tweets]
         logits = []
-        for start in range(0, len(texts), batch_size):
+        starts = range(0, len(texts), batch_size)
+        for start in tqdm(starts, desc=progress, disable=progress is None):
             encodings = self.tokenizer.encode_batch(texts[start : start + batch_size])
             inputs = {
                 "input_ids": np.array([e.ids for e in encodings], dtype=np.int64),
