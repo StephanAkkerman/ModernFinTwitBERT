@@ -300,6 +300,62 @@ probs = (logits / model.config.calibration_temperature).softmax(-1)
 print({{model.config.id2label[i]: p for i, p in enumerate(probs[0].tolist())}})
 ```
 
+## Long texts and several tickers
+
+A tweet is best classified as a whole: on our test and dev sets, splitting every tweet into sentences and averaging their scores was about 0.04 macro F1 worse than reading the whole tweet, because a sentence on its own loses the context of the others ("I hate this coin. But above trend, good"). Two cases still need more than one call: a text longer than the model's 512 tokens, which would otherwise be cut off, and a tweet with a different view on each of its tickers. The snippet below reads a text as a whole when it fits, and otherwise averages the signed scores of its sentences. For each ticker, it averages the sentences that name only that ticker. These per-ticker scores are not measured, since our test sets have one label per tweet.
+
+```python
+import re
+
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+repo = "{repo}"
+tokenizer = AutoTokenizer.from_pretrained(repo)
+model = AutoModelForSequenceClassification.from_pretrained(repo).eval()
+SIGN = {{"BULLISH": 1.0, "BEARISH": -1.0}}
+SEGMENT = re.compile(r"(?<=[.!?])\\s+|[\\n;]+")
+
+
+def preprocess(text):
+    return re.sub(r"@\\S+", "@USER", re.sub(r"http\\S+", "[URL]", text))
+
+
+def signed_scores(texts):
+    # +p for bullish, -p for bearish and 0 for neutral, with calibrated confidence p
+    inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512)
+    with torch.no_grad():
+        probs = (model(**inputs).logits / model.config.calibration_temperature).softmax(-1)
+    conf, label = probs.max(-1)
+    return [SIGN.get(model.config.id2label[i], 0.0) * c for i, c in zip(label.tolist(), conf.tolist())]
+
+
+def sentiment(text, tickers=(), threshold=0.1):
+    # The text's sentiment as a signed score, and one per ticker with sentences of its own
+    text = preprocess(text)
+    segments = [s.strip() for s in SEGMENT.split(text) if len(s.strip()) >= 12] or [text]
+    # A tweet that fits the model is read as a whole: splitting it loses context
+    fits = len(tokenizer(text)["input_ids"]) <= 512
+    scores = signed_scores(segments)
+    overall = signed_scores([text])[0] if fits else sum(scores) / len(scores)
+
+    # Per ticker: the sentences that name it and no other ticker, if the text has several sentences
+    patterns = {{t: re.compile(rf"[$#]?\\b{{re.escape(t)}}\\b", 0 if len(t) < 4 else re.I) for t in tickers}}
+    named = [{{t for t, p in patterns.items() if p.search(s)}} for s in segments]
+    per_ticker = {{}}
+    for ticker in tickers:
+        own = [score for score, names in zip(scores, named) if names == {{ticker}}]
+        if own and len(segments) > 1:
+            per_ticker[ticker] = sum(own) / len(own)
+
+    label = lambda s: "BULLISH" if s > threshold else "BEARISH" if s < -threshold else "NEUTRAL"
+    return label(overall), overall, {{t: (label(s), s) for t, s in per_ticker.items()}}
+
+
+print(sentiment("$NVDA breaking out, loading calls. $INTC looks dead, sold my shares.", ["NVDA", "INTC"]))
+# ('BULLISH', 0.55, {{'NVDA': ('BULLISH', 0.99), 'INTC': ('BEARISH', -0.96)}})
+```
+
 ## Citing & Authors
 
 If you use {name} or FinTwitRoBERTa-large in your research, please cite me as follows:
