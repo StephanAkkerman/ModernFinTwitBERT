@@ -14,24 +14,29 @@ Run from the repository root:
     python ModernFinTwitBERT/export_onnx.py --model output/experiments/models/llrd-0.9-feed-seed42
     python ModernFinTwitBERT/export_onnx.py --hub-repo StephanAkkerman/FinTwitRoBERTa-sentiment
 
-Writes output/onnx/<model>/ (onnx/model_int8.onnx, config.json, tokenizer.json);
---hub-repo uploads onnx/model_int8.onnx to the onnx/ folder of that Hugging Face repo.
+Writes output/onnx/<model>/ (onnx/model_int8.onnx, config.json, tokenizer.json, report.csv
+and README.md, the model card with an "ONNX int8" section on size, speed and scores, replacing
+an earlier one). --hub-repo uploads onnx/model_int8.onnx and that card to the Hugging Face repo.
 """
 
 import argparse
+import re
+import time
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_download
 from onnxruntime.quantization import QuantType, quantize_dynamic
 from onnxruntime.quantization.shape_inference import quant_pre_process
-from sklearn.metrics import f1_score
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from data import load_dev_data, load_test_data
 from onnx_predict import ONNX_FILE, OnnxSentiment
-from thresholds import predict_probs
+from thresholds import apply_thresholds, metrics, predict_probs
+
+LATENCY_TWEETS = 100
 
 
 def export(model, tokenizer, folder: Path) -> Path:
@@ -67,6 +72,70 @@ def export(model, tokenizer, folder: Path) -> Path:
     return int8
 
 
+def latency(predict, tweets: list[str]) -> float:
+    """Milliseconds per tweet, one tweet at a time (as a bot sees them), on this CPU."""
+    predict(tweets[:2])
+    start = time.perf_counter()
+    for tweet in tweets:
+        predict([tweet])
+    return (time.perf_counter() - start) / len(tweets) * 1000
+
+
+def update_card(card: str, report: pd.DataFrame, speed: dict, sizes: dict, repo: str) -> str:
+    """The model card with a section on the ONNX int8 model, replacing an earlier one."""
+    rows = [list(report.columns)] + report.astype(str).values.tolist()
+    table = "\n".join("| " + " | ".join(row) + " |" for row in rows)
+    table = table.replace("\n", "\n| " + " | ".join("---" for _ in rows[0]) + " |\n", 1)
+    section = f"""## ONNX int8
+
+`{ONNX_FILE}` is this model with int8 weights (dynamic per-channel quantization of all
+linear layers and the embeddings) for fast CPU inference, for example on a Raspberry Pi.
+It needs only `onnxruntime` and `tokenizers`, no torch:
+
+| | fp32 (PyTorch) | int8 (ONNX) |
+| --- | --- | --- |
+| size | {sizes["fp32"]:,.0f} MB | {sizes["int8"]:,.0f} MB |
+| ms per tweet (batch 1, {torch.get_num_threads()} CPU threads) | {speed["fp32"]:.0f} | {speed["int8"]:.0f} |
+
+```python
+import json
+
+import numpy as np
+import onnxruntime as ort
+from huggingface_hub import hf_hub_download
+from tokenizers import Tokenizer
+
+repo = "{repo}"
+config = json.loads(open(hf_hub_download(repo, "config.json")).read())
+session = ort.InferenceSession(hf_hub_download(repo, "{ONNX_FILE}"))
+tokenizer = Tokenizer.from_file(hf_hub_download(repo, "tokenizer.json"))
+tokenizer.enable_truncation(128)
+tokenizer.enable_padding(pad_id=1)
+
+encodings = tokenizer.encode_batch(["$NVDA breaking out, loading calls"])
+logits = session.run(None, {{
+    "input_ids": np.array([e.ids for e in encodings], dtype=np.int64),
+    "attention_mask": np.array([e.attention_mask for e in encodings], dtype=np.int64),
+}})[0] / config["calibration_temperature"]
+probs = np.exp(logits) / np.exp(logits).sum(-1, keepdims=True)  # NEUTRAL, BULLISH, BEARISH
+```
+
+Apply `config.decision_thresholds` to `probs` the same way as for the PyTorch model. ModernFinTwitBERT's
+`onnx_predict.OnnxSentiment` does all of this, including the training preprocessing
+(`@USER`, `[URL]`). Scores on the same dev and test sets; `same_label_as_fp32` is how often
+both models give the same argmax label:
+
+{table}
+"""
+    # Keep the section's place on a rerun; a new one goes before the citation section
+    pattern = re.compile(r"## ONNX int8\n.*?(?=\n## |\Z)", re.DOTALL)
+    if pattern.search(card):
+        return pattern.sub(lambda _: section.rstrip() + "\n", card, count=1)
+    if "\n## Citing & Authors" in card:
+        return card.replace("\n## Citing & Authors", "\n" + section + "\n## Citing & Authors", 1)
+    return card.rstrip() + "\n\n" + section
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--model", default="StephanAkkerman/FinTwitRoBERTa-sentiment")
@@ -84,26 +153,70 @@ def main():
     print(f"Saved {int8} ({int8.stat().st_size / 1e6:.0f} MB)\n")
 
     onnx_model = OnnxSentiment(str(folder))
+    thresholds = getattr(model.config, "decision_thresholds", None) or {}
+    report = []
     for name, dataset in (("dev", load_dev_data()), ("test", load_test_data())):
         df = dataset.to_pandas()
         labels = df["label"].to_numpy()
         # The datasets are already preprocessed; preprocess_tweet leaves such text unchanged
-        reference = predict_probs(model, tokenizer, df["text"].tolist()).argmax(1)
-        quantized = onnx_model.probs(df["text"].tolist()).argmax(1)
-        print(
-            f"{name}: macro F1 fp32 {f1_score(labels, reference, average='macro'):.3f}, "
-            f"int8 {f1_score(labels, quantized, average='macro'):.3f}, "
-            f"same label {np.mean(reference == quantized):.1%}"
-        )
+        probs = {
+            "fp32": predict_probs(model, tokenizer, df["text"].tolist()),
+            "int8": onnx_model.probs(df["text"].tolist()),
+        }
+        same = np.mean(probs["fp32"].argmax(1) == probs["int8"].argmax(1))
+        for setting, t in (("argmax", {}), ("thresholds", thresholds)):
+            for variant, p in probs.items():
+                report.append(
+                    {
+                        "split": name,
+                        "model": variant,
+                        "setting": setting,
+                        **metrics(labels, apply_thresholds(p, t)),
+                        "same_label_as_fp32": same,
+                    }
+                )
+    report = pd.DataFrame(report).round(3)
+    report.to_csv(folder / "report.csv", index=False)
+    print(report.to_string(index=False))
+
+    tweets = load_test_data()[:LATENCY_TWEETS]["text"]
+    speed = {
+        "fp32": latency(lambda x: predict_probs(model, tokenizer, x), tweets),
+        "int8": latency(onnx_model.probs, tweets),
+    }
+    sizes = {
+        "fp32": sum(p.numel() for p in model.parameters()) * 4 / 1e6,
+        "int8": int8.stat().st_size / 1e6,
+    }
+    print(f"\nms per tweet (batch 1): {speed}, size MB: {sizes}")
+
+    readme = Path(args.model) / "README.md"
+    if readme.exists():
+        card = readme.read_text()
+    elif args.hub_repo or not Path(args.model).is_dir():
+        card = Path(hf_hub_download(args.hub_repo or args.model, "README.md")).read_text()
+    else:
+        card = ""
+    card = update_card(card, report, speed, sizes, args.hub_repo or args.model)
+    (folder / "README.md").write_text(card)
+    print(f"Wrote the model card to {folder / 'README.md'}")
 
     if args.hub_repo:
-        HfApi().upload_file(
+        message = "Add int8 ONNX model (per-channel dynamic quantization)"
+        api = HfApi()
+        api.upload_file(
             path_or_fileobj=str(int8),
             path_in_repo=ONNX_FILE,
             repo_id=args.hub_repo,
-            commit_message="Add int8 ONNX model (per-channel dynamic quantization)",
+            commit_message=message,
         )
-        print(f"\nUploaded {ONNX_FILE} to {args.hub_repo}")
+        api.upload_file(
+            path_or_fileobj=str(folder / "README.md"),
+            path_in_repo="README.md",
+            repo_id=args.hub_repo,
+            commit_message=message,
+        )
+        print(f"\nUploaded {ONNX_FILE} and the model card to {args.hub_repo}")
 
 
 if __name__ == "__main__":

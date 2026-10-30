@@ -127,7 +127,7 @@ python ModernFinTwitBERT/thresholds.py --model output/experiments/models/llrd-0.
 
 ### Small and fast inference (ONNX int8)
 
-`ModernFinTwitBERT/export_onnx.py` exports the model to ONNX with int8 weights (per-channel dynamic quantization). It is about 4x smaller (358 MB instead of 1.4 GB) and 4x faster on CPU, with the same dev and test F1. The script checks this on both sets and `--hub-repo` uploads the result as `onnx/model_int8.onnx`.
+`ModernFinTwitBERT/export_onnx.py` exports the model to ONNX with int8 weights (per-channel dynamic quantization). It is about 4x smaller (358 MB instead of 1.4 GB) and 4x faster on CPU, with the same dev and test F1. The script checks this on both sets and adds an "ONNX int8" section with the size, speed and scores to the model card. `--hub-repo` uploads the result as `onnx/model_int8.onnx`, together with the updated card.
 
 ```bash
 python ModernFinTwitBERT/export_onnx.py --hub-repo StephanAkkerman/FinTwitRoBERTa-sentiment
