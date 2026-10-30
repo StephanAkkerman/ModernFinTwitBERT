@@ -24,7 +24,6 @@ are reused on the next run, so pass --recompute after retraining a local model.
 
 import argparse
 import json
-import re
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +34,7 @@ from sklearn.metrics import f1_score
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from data import LABELS, load_dev_data, load_test_data
+from sentiment_card import set_section
 
 DIRECTIONAL = ["bullish", "bearish"]
 GRID = np.round(np.arange(0.34, 1.0, 0.01), 2)
@@ -119,8 +119,7 @@ if label != "neutral" and probs[0].max() < model.config.decision_thresholds[labe
 
 {table}
 """
-    card = re.sub(r"## Decision thresholds\n.*?(?=\n## |\Z)", "", card, flags=re.DOTALL)
-    return card.rstrip() + "\n\n" + section
+    return set_section(card, section)
 
 
 def main():

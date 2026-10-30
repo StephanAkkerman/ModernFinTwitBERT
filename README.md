@@ -113,6 +113,7 @@ python ModernFinTwitBERT/experiments.py --only llrd balanced
 - Pick the winner by dev macro F1 (`dev/macro_f1`) and use the test scores only to confirm it, so we don't tune on the test set. The dev set (`data/test/dev_v0.csv`, 749 tweets from 2024 onwards) comes from the same feed and guideline as the test set. `val/f1` is on a split of the training sources and is not a good guide: it ranked the first round of experiments almost in reverse order of test.
 - `test/ece_calibrated` is the calibration error after temperature scaling on the dev set, and `ensemble macro_f1` scores the average of an experiment's seeds.
 - Results go to `output/experiments/results.csv` and `summary.md`; finished runs are skipped on a rerun.
+- `--save` keeps a run's model with its dev-fitted temperature and a Hugging Face model card; `--hub-repo` also uploads it. `python ModernFinTwitBERT/sentiment_card.py --experiment <name> --seed <seed>` rewrites the card of a model that is already trained (it scores the model on the dev and test sets again); see its docstring.
 
 ### Confidence thresholds
 

@@ -29,7 +29,7 @@ Runs already in the results file are skipped. Run from the repository root:
 
 To keep the final model, train it again with --save: the best checkpoint is saved to
 output/experiments/models/<name>-seed<seed> with the dev-fitted temperature in its config
-(`calibration_temperature`) and a model card. --hub-repo also uploads it to Hugging Face
+(`calibration_temperature`) and a model card (sentiment_card.py). --hub-repo also uploads it to Hugging Face
 (private unless --public; log in first with `hf auth login`):
 
     python ModernFinTwitBERT/experiments.py --only llrd-0.9 --seeds 42 --save \
@@ -52,6 +52,7 @@ from huggingface_hub import HfApi
 from benchmark import load_base_model
 from eval import score
 from model import compute_metrics
+from sentiment_card import DEFAULT_REPO, data_stats, model_card, training_args
 from transformers import (
     AutoTokenizer,
     DataCollatorWithPadding,
@@ -186,6 +187,7 @@ def run(
     config: dict,
     out: Path,
     save_dir: Path | None = None,
+    repo: str = DEFAULT_REPO,
 ):
     tokenizer = AutoTokenizer.from_pretrained(base, cache_dir="models")
     max_length = config["finetune"].get("max_length", 128)
@@ -269,70 +271,20 @@ def run(
         trainer.model.config.calibration_temperature = temperature
         trainer.save_model(str(save_dir))
         tokenizer.save_pretrained(save_dir)
-        (save_dir / "README.md").write_text(model_card(experiment, seed, base, row))
+        extra = experiment.get("extra_train", config["finetune"].get("extra_train"))
+        card = model_card(
+            repo,
+            base,
+            experiment,
+            seed,
+            training_args(config, experiment),
+            data_stats(*data, extra),
+            row,
+        )
+        (save_dir / "README.md").write_text(card)
         print(f"Saved model to {save_dir}")
     shutil.rmtree(out, ignore_errors=True)
     return row
-
-
-def model_card(experiment: dict, seed: int, base: str, row: dict) -> str:
-    """A Hugging Face README with the recipe, scores and how to use the temperature."""
-    scores = "\n".join(
-        f"| {metric} | {row[metric]:.3f} |" for metric in SUMMARY_COLUMNS if metric in row
-    )
-    recipe = json.dumps({**experiment, "seed": seed}, indent=2)
-    return f"""---
-base_model: {base}
-library_name: transformers
-pipeline_tag: text-classification
-language: en
-tags:
-- finance
-- twitter
-- sentiment
----
-
-# FinTwitRoBERTa sentiment
-
-Classifies financial tweets as NEUTRAL, BULLISH or BEARISH. Fine-tuned from
-[{base}](https://huggingface.co/{base}) with ModernFinTwitBERT's `experiments.py`.
-
-## Usage
-
-Divide the logits by `config.calibration_temperature` (fitted on the dev set) before the
-softmax to get calibrated confidence scores:
-
-```python
-import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-repo = "<this repo>"
-tokenizer = AutoTokenizer.from_pretrained(repo)
-model = AutoModelForSequenceClassification.from_pretrained(repo).eval()
-
-inputs = tokenizer(["$NVDA breaking out, loading calls"], return_tensors="pt", truncation=True)
-with torch.no_grad():
-    logits = model(**inputs).logits
-probs = (logits / model.config.calibration_temperature).softmax(-1)
-print({{model.config.id2label[i]: p for i, p in enumerate(probs[0].tolist())}})
-```
-
-## Scores
-
-dev = 749 tweets from a real feed (2024+), used to choose the recipe and fit the temperature;
-test = 1,237 held-out tweets from the same feed. `test/ece_calibrated` uses the temperature.
-
-| metric | value |
-| --- | --- |
-{scores}
-| temperature | {row["temperature"]:.3f} |
-
-## Recipe
-
-```json
-{recipe}
-```
-"""
 
 
 def labeled(dataset) -> pd.DataFrame:
@@ -462,7 +414,18 @@ def main():
                 OUTPUT_DIR / "models" / f"{experiment['name']}-seed{seed}" if args.save else None
             )
             row.update(
-                run(experiment, seed, base, finetuning_data(experiment), dev, test, config, out, save_dir)
+                run(
+                    experiment,
+                    seed,
+                    base,
+                    finetuning_data(experiment),
+                    dev,
+                    test,
+                    config,
+                    out,
+                    save_dir,
+                    repo=args.hub_repo or DEFAULT_REPO,
+                )
             )
             results = pd.concat([results, pd.DataFrame([row])], ignore_index=True)
             results.to_csv(results_path, index=False)
