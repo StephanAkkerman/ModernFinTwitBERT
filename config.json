@@ -10,6 +10,7 @@
     },
     "pretrain": {
         "model_name": "FinTwitRoBERTa-large",
+        "hub_repo": "StephanAkkerman/FinTwitRoBERTa-large",
         "base_model": "cardiffnlp/twitter-roberta-large-2022-154m",
         "datasets": [
             {"name": "StephanAkkerman/financial-tweets", "repeat": 3},

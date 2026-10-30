@@ -182,7 +182,7 @@ def load_pretraining_source(source: dict) -> Dataset:
 
 
 def load_pretraining_data(
-    sources: list[dict] | None = None, val_size: int = 10_000
+    sources: list[dict] | None = None, val_size: int = 10_000, stats: dict | None = None
 ) -> tuple:
     """
     Loads the pretraining tweets, without the tweets of the frozen test set.
@@ -198,6 +198,9 @@ def load_pretraining_data(
         By default only StephanAkkerman/crypto-stock-tweets.
     val_size : int, optional
         Number of tweets held out to track the MLM loss, by default 10,000.
+    stats : dict, optional
+        Filled with the tweets per source after cleaning ("tweets_per_source") and the
+        number of training examples after repeats ("train_examples"), for the model card.
         A small fixed set is enough; everything else is used for training.
 
     Returns
@@ -269,6 +272,9 @@ def load_pretraining_data(
         for _ in range(source.get("repeat", 1) - 1)
     ]
     train = concatenate_datasets([train, *extra]).remove_columns("source")
+    if stats is not None:
+        stats["tweets_per_source"] = [int(count) for count in counts]
+        stats["train_examples"] = len(train)
     return train, val
 
 

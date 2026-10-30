@@ -70,9 +70,10 @@ print(f"Predicted sentiment: {predicted_class}")
 
 Training is configured in `config.json` and run from the repository root with `python ModernFinTwitBERT/model.py`. The base model is `cardiffnlp/twitter-roberta-large-2022-154m`, which scored best in the benchmark (macro F1 0.807 on the test set).
 
-1. **Domain pretraining:** set `"mode": "pretrain"`. This continues masked-language-model training on `StephanAkkerman/crypto-stock-tweets` (with the test tweets removed) and saves to `output/<pretrain model_name>`. One epoch takes a few hours on an A100.
+1. **Domain pretraining:** set `"mode": "pretrain"`. This continues masked-language-model training on the sources in `pretrain.datasets` (by default `StephanAkkerman/financial-tweets`, shown 3 times, and `StephanAkkerman/crypto-stock-tweets`, with the test and dev tweets removed) and saves to `output/<pretrain model_name>`. One epoch takes a few hours on an A100. The released result is [FinTwitRoBERTa-large](https://huggingface.co/StephanAkkerman/FinTwitRoBERTa-large).
 
-   - On a rented GPU, `scripts/pretrain_remote.sh` does all of this: it installs the requirements (without flash-attn, which RoBERTa does not use), runs a 50-step trial, then the full run, and uploads the model to a private Hugging Face repo if `HF_REPO` is set.
+   - At the end, the run measures the perplexity of the model and its base model on the test and dev tweets (kept out of pretraining) and writes a Hugging Face model card (`README.md`) and `pretrain_stats.json` next to the model. `python ModernFinTwitBERT/pretrain_card.py` rewrites the card later, e.g. to add the benchmark results; see its docstring.
+   - On a rented GPU, `scripts/pretrain_remote.sh` does all of this: it installs the requirements (without flash-attn, which RoBERTa does not use), runs a 50-step trial, then the full run, and uploads the model with its card to `pretrain.hub_repo` from `config.json` (or `HF_REPO`). A new repo is created private.
    - Start with `python ModernFinTwitBERT/model.py --max-steps 50`: a short trial run that saves nothing, to check speed and memory on a new GPU.
    - The pretraining batch (256) is sized for an 80 GB A100. On a 40 GB GPU, use 128 with `gradient_accumulation_steps` 2.
    - `pretrain.datasets` in `config.json` lists the sources: Hugging Face ids or local `.csv`/`.jsonl`/`.parquet` files, each with an optional `text_column` and `repeat` to upweight it. Put curated sources first: near-duplicates are kept in the first source listed.

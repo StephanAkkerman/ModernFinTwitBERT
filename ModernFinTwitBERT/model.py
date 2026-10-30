@@ -1,12 +1,16 @@
 import argparse
 import json
+import math
 import os
+import traceback
+from datetime import date
 from functools import partial
 
 import numpy as np
 import torch
 from data import load_finetuning_data, load_pretraining_data
 from dotenv import load_dotenv
+from pretrain_card import heldout_perplexities, write_card
 from sklearn.metrics import f1_score, precision_score
 from transformers import (
     AutoModelForMaskedLM,
@@ -108,9 +112,10 @@ class ModernFinTwitBERT:
                     len(self.tokenizer), pad_to_multiple_of=64
                 )
 
-            # Load the data
+            # Load the data; the stats go into the model card
+            self.stats = {}
             self.train, self.val = load_pretraining_data(
-                self.config[self.mode].get("datasets")
+                self.config[self.mode].get("datasets"), stats=self.stats
             )
 
         elif self.mode == "finetune":
@@ -264,7 +269,7 @@ class ModernFinTwitBERT:
             checkpoint = None
             print("Starting training")
 
-        trainer.train(resume_from_checkpoint=checkpoint)
+        train_output = trainer.train(resume_from_checkpoint=checkpoint)
 
         print("Finished training")
 
@@ -277,7 +282,36 @@ class ModernFinTwitBERT:
         self.tokenizer.save_pretrained(self.output_dir)
 
         print("Saved model and tokenizer")
+
+        if self.mode == "pretrain":
+            # A failure here must not stop pretrain_remote.sh from uploading the model
+            try:
+                self.write_pretrain_card(trainer, train_output.metrics, bool(checkpoint))
+            except Exception:
+                traceback.print_exc()
+                print("Could not write the model card, see pretrain_card.py to retry")
         return
+
+    def write_pretrain_card(self, trainer, train_metrics: dict, resumed: bool):
+        """Measure the perplexity and save the stats and model card with the model."""
+        eval_loss = trainer.evaluate()["eval_loss"]
+        self.stats.update(
+            val_tweets=len(self.val),
+            val_perplexity=math.exp(eval_loss),
+            # After a resume the runtime only covers the last part of the run
+            train_hours=None if resumed else train_metrics.get("train_runtime", 0) / 3600,
+            gpu=torch.cuda.get_device_name() if torch.cuda.is_available() else None,
+            date=str(date.today()),
+        )
+        self.stats["heldout"] = heldout_perplexities(
+            trainer.model,
+            self.tokenizer,
+            self.config[self.mode]["base_model"],
+            self.max_length,
+            self.config[self.mode].get("mlm_probability", 0.15),
+        )
+        print(f"Held-out perplexity: {self.stats['heldout']}")
+        write_card(self.config, self.output_dir, self.stats, self.tokenizer.mask_token)
 
     def model_init(self, trial=None):
         model = load_pretrained(
