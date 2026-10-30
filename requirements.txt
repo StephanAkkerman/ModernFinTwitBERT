@@ -8,5 +8,7 @@ seaborn
 wandb
 torch --index-url https://download.pytorch.org/whl/cu132
 dotenv
+onnx  # export_onnx.py
+onnxruntime
 sentencepiece  # DeBERTa-v3 tokenizer
 emoji  # BERTweet tokenizer
