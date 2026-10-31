@@ -34,6 +34,17 @@ output/experiments/models/<name>-seed<seed> with the dev-fitted temperature in i
 
     python ModernFinTwitBERT/experiments.py --only llrd-0.9 --seeds 42 --save \
         --hub-repo StephanAkkerman/FinTwitRoBERTa-sentiment
+
+r/wallstreetbets: experiments_wsb.json has "domain": "wsb", which trains on WSB posts
+(wsb.py), picks by the WSB validation posts (`dev/macro_f1`), tests on the 227 WSB test
+posts the old FinTwitBERT-wsb-sentiment was tested on, and also scores the tweet test set
+(`tweets/macro_f1`) to show what the model forgets about tweets. Results go to
+output/experiments_wsb. Extra experiment options there:
+- "base": start from another model than the file's "base"
+- "wsb_full": true also trains on the WSB posts the annotators did not all agree on
+- "with_tweets": {"wsb_repeat": 5} trains on the tweet data plus the WSB posts x5
+
+    python ModernFinTwitBERT/experiments.py --config experiments_wsb.json
 """
 
 import argparse
@@ -53,6 +64,7 @@ from benchmark import load_base_model
 from eval import score
 from model import compute_metrics
 from sentiment_card import DEFAULT_REPO, data_stats, model_card, training_args
+from wsb import WSB_REPO, load_wsb_data, load_wsb_dev, load_wsb_test, mix, wsb_card
 from transformers import (
     AutoTokenizer,
     DataCollatorWithPadding,
@@ -73,6 +85,7 @@ SUMMARY_COLUMNS = [
     "test/recall_bearish",
     "test/ece",
     "test/ece_calibrated",
+    "tweets/macro_f1",
 ]
 # Short names for grid values in experiment names, e.g. grid-lr2e-05-ep3
 SHORT = {"learning_rate": "lr", "num_train_epochs": "ep", "weight_decay": "wd"}
@@ -188,9 +201,15 @@ def run(
     out: Path,
     save_dir: Path | None = None,
     repo: str = DEFAULT_REPO,
+    extra_tests: dict | None = None,
+    max_length: int | None = None,
 ):
+    """
+    Train once and score it. `extra_tests` are more test sets by name, scored as
+    `<name>/macro_f1` etc. (the WSB runs score the tweet test set as "tweets").
+    """
     tokenizer = AutoTokenizer.from_pretrained(base, cache_dir="models")
-    max_length = config["finetune"].get("max_length", 128)
+    max_length = max_length or config["finetune"].get("max_length", 128)
 
     def encode(batch):
         return tokenizer(batch["text"], truncation=True, max_length=max_length)
@@ -198,6 +217,11 @@ def run(
     train, val = (split.map(encode, batched=True, remove_columns=["text"]) for split in data)
     dev_encoded = dev.map(encode, batched=True, remove_columns=["text", "file"])
     test_encoded = test.map(encode, batched=True, remove_columns=["text", "file"])
+    extra_tests = extra_tests or {}
+    extra_encoded = {
+        name: dataset.map(encode, batched=True, remove_columns=["text", "file"])
+        for name, dataset in extra_tests.items()
+    }
 
     use_wandb = wandb_enabled()
     args = TrainingArguments(
@@ -261,6 +285,10 @@ def run(
         **test_metrics(probs, labeled(test)),
         "test/ece_calibrated": test_metrics(calibrated, labeled(test))["test/ece"],
     }
+    for name, encoded in extra_encoded.items():
+        extra_logits = trainer.predict(encoded).predictions / temperature
+        extra_probs = torch.softmax(torch.tensor(extra_logits, dtype=torch.float32), -1).numpy()
+        row.update(test_metrics(extra_probs, labeled(extra_tests[name]), prefix=name))
     if use_wandb:
         wandb.log({k: v for k, v in row.items()})
         wandb.finish()
@@ -272,15 +300,19 @@ def run(
         trainer.save_model(str(save_dir))
         tokenizer.save_pretrained(save_dir)
         extra = experiment.get("extra_train", config["finetune"].get("extra_train"))
-        card = model_card(
-            repo,
-            base,
-            experiment,
-            seed,
-            training_args(config, experiment),
-            data_stats(*data, extra),
-            row,
-        )
+        if extra_tests:
+            args_used = {**training_args(config, experiment), "max_length": max_length}
+            card = wsb_card(repo, base, experiment, seed, args_used, row)
+        else:
+            card = model_card(
+                repo,
+                base,
+                experiment,
+                seed,
+                training_args(config, experiment),
+                data_stats(*data, extra),
+                row,
+            )
         (save_dir / "README.md").write_text(card)
         print(f"Saved model to {save_dir}")
     shutil.rmtree(out, ignore_errors=True)
@@ -336,6 +368,7 @@ def upload(folder: Path, repo: str, private: bool):
 
 
 def main():
+    global OUTPUT_DIR
     parser = argparse.ArgumentParser(description="Run fine-tuning experiments")
     parser.add_argument("--config", default="experiments.json")
     parser.add_argument("--only", nargs="+", help="Only run these experiments, by name")
@@ -358,6 +391,9 @@ def main():
 
     with open(args.config) as file:
         plan = json.load(file)
+    wsb = plan.get("domain") == "wsb"
+    if wsb:
+        OUTPUT_DIR = Path("output/experiments_wsb")
     with open("config.json") as file:
         config = json.load(file)
 
@@ -388,7 +424,7 @@ def main():
     # Experiments with the same extra training files share one copy of the data
     datasets = {}
 
-    def finetuning_data(experiment: dict) -> tuple:
+    def tweet_data(experiment: dict) -> tuple:
         extra = experiment.get("extra_train", config["finetune"].get("extra_train"))
         key = json.dumps(extra)
         if key not in datasets:
@@ -399,8 +435,23 @@ def main():
             )
         return datasets[key]
 
-    dev = load_dev_data()
-    test = load_test_data()
+    def finetuning_data(experiment: dict) -> tuple:
+        if not wsb:
+            return tweet_data(experiment)
+        train, val = load_wsb_data(full=experiment.get("wsb_full", False))
+        if "with_tweets" in experiment:
+            # The tweet validation split is left out: WSB validation picks the checkpoint
+            tweets, _ = tweet_data(experiment)
+            train = mix(train, tweets, experiment["with_tweets"].get("wsb_repeat", 1))
+        return train, val
+
+    if wsb:
+        dev, test = load_wsb_dev(), load_wsb_test()
+        extra_tests = {"tweets": load_test_data()}
+    else:
+        dev, test = load_dev_data(), load_test_data()
+        extra_tests = None
+    default_repo = WSB_REPO if wsb else DEFAULT_REPO
 
     for experiment in experiments:
         for seed in seeds:
@@ -417,14 +468,16 @@ def main():
                 run(
                     experiment,
                     seed,
-                    base,
+                    experiment.get("base", base),
                     finetuning_data(experiment),
                     dev,
                     test,
                     config,
                     out,
                     save_dir,
-                    repo=args.hub_repo or DEFAULT_REPO,
+                    repo=args.hub_repo or default_repo,
+                    extra_tests=extra_tests,
+                    max_length=plan.get("max_length"),
                 )
             )
             results = pd.concat([results, pd.DataFrame([row])], ignore_index=True)
