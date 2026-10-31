@@ -1,0 +1,59 @@
+{
+    "domain": "wsb",
+    "base": "StephanAkkerman/FinTwitRoBERTa-sentiment",
+    "max_length": 256,
+    "seeds": [
+        42,
+        43,
+        44
+    ],
+    "experiments": [
+        {
+            "name": "from-sentiment",
+            "llrd": 0.9,
+            "grid": {
+                "learning_rate": [
+                    1e-05,
+                    2e-05
+                ]
+            },
+            "finetune_args": {
+                "num_train_epochs": 4,
+                "per_device_train_batch_size": 16
+            }
+        },
+        {
+            "name": "from-large",
+            "base": "StephanAkkerman/FinTwitRoBERTa-large",
+            "llrd": 0.9,
+            "finetune_args": {
+                "learning_rate": 2e-05,
+                "num_train_epochs": 4,
+                "per_device_train_batch_size": 16
+            }
+        },
+        {
+            "name": "from-sentiment-full",
+            "llrd": 0.9,
+            "wsb_full": true,
+            "finetune_args": {
+                "learning_rate": 2e-05,
+                "num_train_epochs": 4,
+                "per_device_train_batch_size": 16
+            }
+        },
+        {
+            "name": "with-tweets",
+            "base": "StephanAkkerman/FinTwitRoBERTa-large",
+            "llrd": 0.9,
+            "with_tweets": {"wsb_repeat": 5},
+            "extra_train": [{"path": "data/train/feed_v1.csv"}],
+            "finetune_args": {
+                "learning_rate": 2e-05,
+                "num_train_epochs": 2,
+                "per_device_train_batch_size": 16,
+                "gradient_accumulation_steps": 2
+            }
+        }
+    ]
+}

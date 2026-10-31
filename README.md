@@ -115,6 +115,21 @@ python ModernFinTwitBERT/experiments.py --only llrd balanced
 - Results go to `output/experiments/results.csv` and `summary.md`; finished runs are skipped on a rerun.
 - `--save` keeps a run's model with its dev-fitted temperature and a Hugging Face model card; `--hub-repo` also uploads it. `python ModernFinTwitBERT/sentiment_card.py --experiment <name> --seed <seed>` rewrites the card of a model that is already trained (it scores the model on the dev and test sets again); see its docstring.
 
+### r/wallstreetbets model
+
+`experiments_wsb.json` fine-tunes a variant for r/wallstreetbets posts on the [WSBS](https://github.com/moonscape95/WSBS) dataset (downloaded on first use). It uses the same train/validation/test split of `WSB_all_agree.csv` as [FinTwitBERT-wsb-sentiment](https://huggingface.co/StephanAkkerman/FinTwitBERT-wsb-sentiment), so both are tested on the same 227 posts (the old model scores 0.821 macro F1). Experiments are picked by macro F1 on the 226 WSB validation posts (`dev/macro_f1`), and `tweets/macro_f1` shows how well each still reads tweets. Results go to `output/experiments_wsb/`.
+
+```bash
+python ModernFinTwitBERT/experiments.py --config experiments_wsb.json
+python ModernFinTwitBERT/experiments.py --config experiments_wsb.json --only from-sentiment-lr2e-05 --seeds 42 \
+    --hub-repo StephanAkkerman/FinTwitRoBERTa-wsb-sentiment
+python ModernFinTwitBERT/wsb.py --score StephanAkkerman/FinTwitBERT-wsb-sentiment  # any model on the WSB test posts
+```
+
+- `from-sentiment` continues from FinTwitRoBERTa-sentiment (as the old WSB model did from FinTwitBERT-sentiment), `from-large` starts from the pre-trained model, `from-sentiment-full` also trains on the 1,411 posts the annotators did not all agree on, and `with-tweets` trains one model on the tweets plus the WSB posts (x5) to see if a single model can serve both.
+- Posts are longer than tweets, so `max_length` is 256 (3% of posts are longer).
+- `--hub-repo` uploads the chosen run to its own Hugging Face repo (created private unless `--public`) with a WSB model card (`wsb_card()` in `wsb.py`, same layout as the FinTwitRoBERTa-sentiment card) and the temperature in `config.calibration_temperature`. Without `--hub-repo`, `--save` keeps the model and card in `output/experiments_wsb/models/`.
+
 ### Confidence thresholds
 
 `ModernFinTwitBERT/thresholds.py` tunes how confident the model must be before a tweet counts as bullish or bearish (below the threshold it is neutral). It picks, per class, the lowest threshold whose dev precision reaches `--target-precision` (default 0.9), confirms it on the test set and writes the full tradeoff tables to `output/thresholds/`. Rerun it after every retrain.
