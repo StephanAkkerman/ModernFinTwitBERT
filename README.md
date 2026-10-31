@@ -128,6 +128,7 @@ python ModernFinTwitBERT/wsb.py --score StephanAkkerman/FinTwitBERT-wsb-sentimen
 
 - `from-sentiment` continues from FinTwitRoBERTa-sentiment (as the old WSB model did from FinTwitBERT-sentiment), `from-large` starts from the pre-trained model, `from-sentiment-full` also trains on the 1,411 posts the annotators did not all agree on, and `with-tweets` trains one model on the tweets plus the WSB posts (x5) to see if a single model can serve both.
 - Posts are longer than tweets, so `max_length` is 256 (3% of posts are longer).
+- `--hub-repo` uploads the chosen run to its own Hugging Face repo (created private unless `--public`) with a WSB model card (`wsb_card()` in `wsb.py`, same layout as the FinTwitRoBERTa-sentiment card) and the temperature in `config.calibration_temperature`. Without `--hub-repo`, `--save` keeps the model and card in `output/experiments_wsb/models/`.
 
 ### Confidence thresholds
 

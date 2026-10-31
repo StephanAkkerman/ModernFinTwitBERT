@@ -302,7 +302,8 @@ def run(
         extra = experiment.get("extra_train", config["finetune"].get("extra_train"))
         if extra_tests:
             args_used = {**training_args(config, experiment), "max_length": max_length}
-            card = wsb_card(repo, base, experiment, seed, args_used, row)
+            sizes = {"train": len(data[0]), "val": len(data[1])}
+            card = wsb_card(repo, base, experiment, seed, args_used, row, sizes)
         else:
             card = model_card(
                 repo,

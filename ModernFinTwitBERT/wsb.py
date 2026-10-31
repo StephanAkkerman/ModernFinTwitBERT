@@ -129,14 +129,131 @@ def mix(wsb: Dataset, tweets: Dataset, wsb_repeat: int) -> Dataset:
     return concatenate_datasets([tweets] + [wsb] * wsb_repeat).shuffle(seed=42)
 
 
-WSB_TAGS = ["finance", "reddit", "wallstreetbets", "sentiment-analysis", "RoBERTa", "FinTwitBERT", "stocks"]
+WSB_TAGS = [
+    "finance",
+    "reddit",
+    "wallstreetbets",
+    "sentiment-analysis",
+    "NLP",
+    "RoBERTa",
+    "FinTwitBERT",
+    "FinTwitRoBERTa",
+    "sentiment",
+    "financial-analysis",
+    "financial-sentiment-analysis",
+    "stocks",
+    "stock-market",
+    "crypto",
+    "cryptocurrency",
+]
+
+WSB_WIDGETS = [
+    ("Come on TSLA. Fly you regarded bird!!", "Bullish WSB post"),
+    ("Lmfao so many puts got bent", "Bullish WSB post 2"),
+    ("Bulls asses are about to be bleeding after this upcoming dump", "Bearish WSB post"),
+    ("$BBBY has 40% short interest. It will probably go bankrupt and everyone knows it.", "Bearish WSB post 2"),
+    ("What are SPY calls? Asking for a friend", "Neutral WSB post"),
+]
+# FinTwitRoBERTa-sentiment without WSB training, on the same test posts
+FINTWITROBERTA_SENTIMENT_WSB_F1 = 0.657
 
 
-def wsb_card(repo: str, base: str, experiment: dict, seed: int, args: dict, row: dict) -> str:
-    """The README.md for a WSB sentiment model saved by experiments.py --save."""
+def wsb_card(
+    repo: str, base: str, experiment: dict, seed: int, args: dict, row: dict, data: dict
+) -> str:
+    """
+    The README.md for a WSB sentiment model saved by experiments.py --save, in the layout
+    of the FinTwitRoBERTa-sentiment card. `data` has the "train" and "val" post counts.
+    """
     name = repo.split("/")[-1]
-    base_link = f"[{base.split('/')[-1]}](https://huggingface.co/{base})" if "/" in base else base
-    rows = [
+    base_name = base.rstrip("/").split("/")[-1]
+    base_link = f"[{base_name}](https://huggingface.co/{base})" if "/" in base else f"`{base}`"
+
+    front = [
+        "license: mit",
+        "datasets:\n- moonscape95/WSBS",
+        "language:\n- en",
+        "metrics:\n- accuracy\n- f1\n- precision\n- recall",
+        "library_name: transformers",
+        "pipeline_tag: text-classification",
+        "tags:\n" + "\n".join(f"- {tag}" for tag in WSB_TAGS),
+        f"base_model: {base}",
+        "widget:\n"
+        + "\n".join(
+            f"- text: {json.dumps(text, ensure_ascii=False)}\n  example_title: {title}"
+            for text, title in WSB_WIDGETS
+        ),
+    ]
+    if "test/macro_f1" in row:
+        metrics = [("f1", "macro_f1", "Macro F1"), ("accuracy", "accuracy", "Accuracy")]
+        front.append(
+            f"model-index:\n- name: {name}\n  results:\n  - task:\n"
+            "      type: text-classification\n      name: Sentiment Analysis\n"
+            "    dataset:\n      name: WSBS all-agree test split (227 posts)\n"
+            "      type: moonscape95/WSBS\n    metrics:\n"
+            + "\n".join(
+                f"    - type: {kind}\n      name: {title}\n      value: {row[f'test/{key}']:.3f}"
+                for kind, key, title in metrics
+                if f"test/{key}" in row
+            )
+        )
+
+    sources = [
+        "- [WSBS](https://github.com/moonscape95/WSBS) `WSB_all_agree.csv`: 1,509 r/wallstreetbets "
+        "posts and comments that all annotators labeled the same, split 70/15/15 into training, "
+        "validation and test posts exactly as for FinTwitBERT-wsb-sentiment."
+    ]
+    if experiment.get("wsb_full"):
+        sources.append(
+            "- WSBS `WSB_full.csv`: the posts the annotators did not all agree on, with their "
+            "majority label, added to the training posts only."
+        )
+    if "with_tweets" in experiment:
+        repeat = experiment["with_tweets"].get("wsb_repeat", 1)
+        sources.append(
+            "- The labeled financial tweets that "
+            "[FinTwitRoBERTa-sentiment](https://huggingface.co/StephanAkkerman/FinTwitRoBERTa-sentiment) "
+            f"was trained on, with the WSB posts repeated {repeat} times so they are not drowned out."
+        )
+
+    batch = args["per_device_train_batch_size"] * args.get("gradient_accumulation_steps", 1)
+    warmup = args.get("warmup_steps", 0)
+    warmup = (
+        f"{warmup:.0%} warmup" if isinstance(warmup, float) and warmup < 1 else f"{warmup} warmup steps"
+    )
+    epochs = args["num_train_epochs"]
+    recipe = (
+        f"{epochs:g} epoch{'' if epochs == 1 else 's'}, learning rate {args['learning_rate']:g} "
+        f"with {warmup}"
+    )
+    if "llrd" in experiment:
+        recipe += f" and layer-wise learning-rate decay of {experiment['llrd']:g}"
+    recipe += (
+        f", weight decay {args.get('weight_decay', 0):g}, batch size {batch}, maximum length "
+        f"{args.get('max_length', 256)} tokens, seed {seed}. The checkpoint with the best "
+        f"validation F1 ({data['val']:,} WSB posts) is kept"
+    )
+    details = [
+        f"- **Base model:** {base_link}.",
+        "- **Labels:** `NEUTRAL`, `BULLISH`, `BEARISH`.",
+        f"- **Training:** {recipe}. The recipe (`{experiment['name']}` in `experiments_wsb.json`) "
+        "was chosen by its macro F1 on the WSB validation posts.",
+    ]
+    if "temperature" in row:
+        details.append(
+            f"- **Calibration:** `config.calibration_temperature` = {row['temperature']:.3f}, "
+            "fitted on the WSB validation posts. Divide the logits by it before the softmax to get "
+            "confidence scores that match how often the model is right."
+        )
+
+    interval = ""
+    if "test/macro_f1_low" in row:
+        interval = (
+            f" The 95% bootstrap interval of the test macro F1 is "
+            f"{row['test/macro_f1_low']:.3f}–{row['test/macro_f1_high']:.3f}: with 227 posts, "
+            "differences of a few points are noise."
+        )
+    lines = [
         ("Macro F1", "macro_f1"),
         ("Accuracy", "accuracy"),
         ("Bullish precision", "precision_bullish"),
@@ -144,75 +261,106 @@ def wsb_card(repo: str, base: str, experiment: dict, seed: int, args: dict, row:
         ("Bearish precision", "precision_bearish"),
         ("Bearish recall", "recall_bearish"),
         ("Neutral recall", "recall_neutral"),
+        ("Calibration error (ECE)", "ece_calibrated"),
     ]
-    table = ["| Metric | WSB test (227 posts) | Tweet test (1,237 tweets) |", "| --- | --- | --- |"]
-    for title, key in rows:
-        cells = [row.get(f"{split}/{key}") for split in ("test", "tweets")]
-        table.append(f"| {title} | " + " | ".join("–" if c is None else f"{c:.3f}" for c in cells) + " |")
-    data = "the training posts (70%) of the all-agree split"
-    if experiment.get("wsb_full"):
-        data += ", plus the posts the annotators did not all agree on (majority label)"
-    if "with_tweets" in experiment:
-        data += (
-            f", repeated {experiment['with_tweets'].get('wsb_repeat', 1)} times, mixed with the "
-            "labeled tweets FinTwitRoBERTa-sentiment was trained on"
+    table = [
+        "| Metric | WSB test (227 posts) | WSB validation (226 posts) | Tweet test (1,237 tweets) |",
+        "| --- | --- | --- | --- |",
+    ]
+    for title, key in lines:
+        cells = [row.get(f"{split}/{key}") for split in ("test", "dev", "tweets")]
+        if all(c is None for c in cells):
+            continue
+        table.append(
+            f"| {title} | " + " | ".join("–" if c is None else f"{c:.3f}" for c in cells) + " |"
         )
-    batch = args["per_device_train_batch_size"] * args.get("gradient_accumulation_steps", 1)
-    llrd = f", layer-wise learning rate decay {experiment['llrd']}" if "llrd" in experiment else ""
-    temperature = row.get("temperature")
-    front = "\n".join(
-        [
-            "---",
-            "license: mit",
-            "datasets:\n- moonscape95/WSBS",
-            "language:\n- en",
-            "library_name: transformers",
-            "pipeline_tag: text-classification",
-            "tags:\n" + "\n".join(f"- {tag}" for tag in WSB_TAGS),
-            f"base_model: {base}",
-            "widget:\n- text: " + json.dumps("Come on TSLA. Fly you regarded bird!!"),
-            "---",
-        ]
-    )
-    calibration = (
-        f" The scores are not calibrated; for confidence scores, divide the logits by "
-        f"`config.calibration_temperature` ({temperature:.3f}, fitted on the validation posts)."
-        if temperature
-        else ""
-    )
-    return f"""{front}
+
+    return f"""---
+{chr(10).join(front)}
+---
+
 # {name}
 
-{name} classifies r/wallstreetbets posts and comments as **bullish**, **bearish** or **neutral**. It is {base_link} fine-tuned on Reddit posts, for the slang, sarcasm and longer texts of retail trading subreddits. For tweets, use [FinTwitRoBERTa-sentiment](https://huggingface.co/StephanAkkerman/FinTwitRoBERTa-sentiment).
+{name} is a fine-tuned model for classifying the sentiment of r/wallstreetbets posts and comments as bullish, bearish or neutral. It uses {base_link} as a base model and was fine-tuned on Reddit posts, because the slang, sarcasm and longer texts of retail trading subreddits differ from tweets.
+It is the successor of [FinTwitBERT-wsb-sentiment](https://huggingface.co/StephanAkkerman/FinTwitBERT-wsb-sentiment). For tweets, use [FinTwitRoBERTa-sentiment](https://huggingface.co/StephanAkkerman/FinTwitRoBERTa-sentiment).
 
-## Results
+## Intended Uses
 
-The WSB test posts are the 15% of [WSBS](https://github.com/moonscape95/WSBS) `WSB_all_agree.csv` held out by [FinTwitBERT-wsb-sentiment](https://huggingface.co/StephanAkkerman/FinTwitBERT-wsb-sentiment), so the two compare directly. With 227 posts, differences of a few points are within noise. FinTwitBERT-wsb-sentiment scores {OLD_WSB_F1:.3f} macro F1 on them. The tweet test set shows how well it still reads tweets.
+{name} is intended for classifying posts and comments on r/wallstreetbets and similar retail trading subreddits. Posts up to {args.get('max_length', 256)} tokens are read as a whole (about 97% of WSB posts); longer ones are cut off unless you split them.
+
+## Dataset
+
+{name} has been trained on:
+{chr(10).join(sources)}
+
+In total {data['train']:,} texts for training and {data['val']:,} WSB posts for validation. The test posts were never used for training or for choosing the recipe.
+
+## Model Details
+
+{chr(10).join(details)}
+
+## Evaluation
+
+The test set is the 227 held-out posts of the WSBS split that FinTwitBERT-wsb-sentiment was also tested on, so the scores compare directly: FinTwitBERT-wsb-sentiment scores a macro F1 of {OLD_WSB_F1:.3f} and FinTwitRoBERTa-sentiment (no WSB training) {FINTWITROBERTA_SENTIMENT_WSB_F1:.3f}.{interval} The tweet test set (1,237 tweets from a financial Twitter feed) shows how well the model still reads tweets.
 
 {chr(10).join(table)}
 
-## Training
+## More Information
 
-- **Data:** {data}. The checkpoint and the temperature were chosen on the 226 validation posts.
-- **Arguments:** learning rate {args["learning_rate"]}, {args["num_train_epochs"]} epochs, batch size {batch}, max length {args["max_length"]} tokens{llrd}, seed {seed}.
-- **Code:** [ModernFinTwitBERT](https://github.com/StephanAkkerman/ModernFinTwitBERT) (`experiments.py --config experiments_wsb.json`, experiment `{experiment["name"]}`).
+For a comprehensive overview, including the training setup and analysis of the model, visit the [ModernFinTwitBERT GitHub repository](https://github.com/StephanAkkerman/ModernFinTwitBERT).
 
 ## Usage
+
+Using [HuggingFace's transformers library](https://huggingface.co/docs/transformers/index) the model and tokenizers can be converted into a pipeline for text classification.
 
 ```python
 from transformers import pipeline
 
-pipe = pipeline("text-classification", model="<this repo>")
+# Create a sentiment analysis pipeline
+pipe = pipeline(
+    "sentiment-analysis",
+    model="{repo}",
+)
+
+# Get the predicted sentiment
 print(pipe("Come on TSLA. Fly you regarded bird!!"))
 ```
 
-Links were replaced by `[URL]` and user mentions by `@USER` during training.{calibration}
+The model was trained with links replaced by `[URL]`, user mentions (`u/name`) by `@USER` and Reddit emote markup removed, so do the same for the best results. The pipeline's scores are not calibrated; for confidence scores, divide the logits by `config.calibration_temperature`:
 
-## Labels
+```python
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-- 0: NEUTRAL
-- 1: BULLISH
-- 2: BEARISH
+tokenizer = AutoTokenizer.from_pretrained("{repo}")
+model = AutoModelForSequenceClassification.from_pretrained("{repo}").eval()
+
+inputs = tokenizer(["GME to the moon, holding my calls"], return_tensors="pt", truncation=True, max_length=512)
+with torch.no_grad():
+    logits = model(**inputs).logits
+probs = (logits / model.config.calibration_temperature).softmax(-1)
+print({{model.config.id2label[i]: p for i, p in enumerate(probs[0].tolist())}})
+```
+
+## Citing & Authors
+
+If you use {name} in your research, please cite me as follows:
+
+```
+@misc{{{name.replace("-", "")},
+  author = {{Stephan Akkerman}},
+  title = {{{name}: A Sentiment Classifier for r/wallstreetbets}},
+  year = {{2026}},
+  publisher = {{Hugging Face}},
+  howpublished = {{\\url{{https://huggingface.co/{repo}}}}}
+}}
+```
+
+The training data is the WSBS dataset by [moonscape95](https://github.com/moonscape95/WSBS).
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](https://choosealicense.com/licenses/mit/) file for details.
 """
 
 
